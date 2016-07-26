@@ -115,7 +115,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)..\Static-Debug;C:\Users\Administrator\nvml\src\windows\getopt_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)..\Static-Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
       <AdditionalDependencies>ntdll.lib;libpmemobj.lib;Shlwapi.lib;liblinux.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
@@ -158,7 +158,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;C:\Users\Administrator\nvml\src\windows\getopt_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
       <AdditionalDependencies>ntdll.lib;libpmemobj.lib;Shlwapi.lib;liblinux.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ProjectReference>
@@ -180,7 +180,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;C:\Users\Administrator\nvml\src\windows\getopt_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
       <AdditionalDependencies>ntdll.lib;libpmemobj.lib;Shlwapi.lib;liblinux.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ProjectReference>

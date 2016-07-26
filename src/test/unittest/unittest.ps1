@@ -60,7 +60,7 @@ function getLineCount {
 }
 
 #
-# convert_to_bytes -- converts the sting with K, M, G or T prefixes
+# convert_to_bytes -- converts the string with K, M, G or T suffixes 
 # to bytes
 #
 # example:
@@ -75,14 +75,38 @@ function convert_to_bytes() {
 
     param([string]$size)
 
-    if ($size.ToLower().EndsWith("k")) {
+    if ($size.ToLower().EndsWith("b")) {
+        $size = [int64]($size.Substring(0, $size.Length - 1))
+    } elseif ($size.ToLower().EndsWith("k")) {
         $size = [int64]($size.Substring(0, $size.Length - 1)) * 1kb
     } elseif ($size.ToLower().EndsWith("m")) {
         $size = [int64]($size.Substring(0, $size.Length - 1)) * 1mb
     } elseif ($size.ToLower().EndsWith("g")) {
         $size = [int64]($size.Substring(0, $size.Length - 1)) * 1gb
     } elseif ($size.ToLower().EndsWith("t")) {
-        $size = [int64]($size.Substring(0, $size.Length - 1))* 1tb
+        $size = [int64]($size.Substring(0, $size.Length - 1)) * 1tb
+    } elseif ($size.ToLower().EndsWith("p")) {
+        $size = [int64]($size.Substring(0, $size.Length - 1)) * 1pb
+    } elseif ($size.ToLower().EndsWith("kib")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1kb
+    } elseif ($size.ToLower().EndsWith("mib")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1mb
+    } elseif ($size.ToLower().EndsWith("gib")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1gb
+    } elseif ($size.ToLower().EndsWith("tib")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1tb
+    } elseif ($size.ToLower().EndsWith("pib")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1pb
+    } elseif ($size.ToLower().EndsWith("kb")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1000
+    } elseif ($size.ToLower().EndsWith("mb")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1000 * 1000
+    } elseif ($size.ToLower().EndsWith("gb")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1000 * 1000 * 1000
+    } elseif ($size.ToLower().EndsWith("tb")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1000 * 1000 * 1000 * 1000
+    } elseif ($size.ToLower().EndsWith("pb")) {
+        $size = [int64]($size.Substring(0, $size.Length - 3)) * 1000 * 1000 * 1000 * 1000 * 1000
     }
 
     return $size
@@ -277,7 +301,6 @@ function create_poolset {
         }
 
         $asize = convert_to_bytes($asize)
-        $fsize = convert_to_bytes($fsize)
 
         switch -regex ($cmd) {
             # do nothing

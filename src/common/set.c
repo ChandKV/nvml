@@ -391,6 +391,22 @@ util_unmap_part(struct pool_set_part *part)
 }
 
 /*
+ * util_unmap_parts -- unmap parts from start_index to the end_index
+ */
+int
+util_unmap_parts(struct pool_replica *rep, unsigned start_index,
+	unsigned end_index)
+{
+	LOG(3, "rep: %p, start_index: %u, end_index: %u", rep, start_index,
+		end_index);
+
+	for (unsigned p = start_index; p <= end_index; p++)
+		util_unmap_part(&rep->part[p]);
+
+	return 0;
+}
+
+/*
  * util_poolset_free -- free pool set info
  */
 void
@@ -1663,9 +1679,7 @@ util_replica_create_local(struct pool_set *set, unsigned repidx, int flags,
 					retry_for_contiguous_addr = 1;
 					remaining_retries--;
 
-					/* unmap the parts that are mapped */
-					for (unsigned p = 0; p < p; p++)
-						util_unmap_part(&rep->part[p]);
+					util_unmap_parts(rep, 0, p-1);
 
 					/* release rest of the VA reserved */
 					ASSERTne(addr, NULL);
@@ -2061,9 +2075,7 @@ util_replica_open_local(struct pool_set *set, unsigned repidx, int flags)
 					retry_for_contiguous_addr = 1;
 					remaining_retries--;
 
-					/* unmap the parts that are mapped */
-					for (unsigned p = 0; p < p; p++)
-						util_unmap_part(&rep->part[p]);
+					util_unmap_parts(rep, 0, p-1);
 
 					/* release rest of the VA reserved */
 					ASSERTne(addr, NULL);

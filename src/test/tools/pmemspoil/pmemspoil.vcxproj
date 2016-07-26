@@ -34,9 +34,6 @@
     <ProjectReference Include="..\..\..\libpmemobj\libpmemobj.vcxproj">
       <Project>{1baa1617-93ae-4196-8a1a-bd492fb18aef}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\..\..\libpmempool\libpmempool.vcxproj">
-      <Project>{cf9a0883-6334-44c7-ac29-349468c78e27}</Project>
-    </ProjectReference>
     <ProjectReference Include="..\..\..\libpmem\libpmem.vcxproj">
       <Project>{9e9e3d25-2139-4a5d-9200-18148ddead45}</Project>
     </ProjectReference>
@@ -127,7 +124,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)..\Static-Debug;C:\Users\Administrator\nvml\src\windows\getopt_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)..\Static-Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
       <AdditionalDependencies>libpmem.lib;libpmemblk.lib;libpmemobj.lib;libpmemlog.lib;Shlwapi.lib;liblinux.lib;libpmemcommon.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
@@ -170,7 +167,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;C:\Users\Administrator\nvml\src\windows\getopt_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
       <AdditionalDependencies>libpmem.lib;libpmemblk.lib;libpmemobj.lib;libpmemlog.lib;Shlwapi.lib;liblinux.lib;libpmemcommon.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ProjectReference>
@@ -192,7 +189,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;C:\Users\Administrator\nvml\src\windows\getopt_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(OutDir);$(OutDir)/../Static-Release;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug;$(ProjectDir)..\..\..\windows\getops_port\x64\Debug\</AdditionalLibraryDirectories>
       <AdditionalDependencies>libpmem.lib;libpmemblk.lib;libpmemobj.lib;libpmemlog.lib;Shlwapi.lib;liblinux.lib;libpmemcommon.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ProjectReference>
