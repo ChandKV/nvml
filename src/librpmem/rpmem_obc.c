@@ -57,9 +57,6 @@
  * rpmem_obc -- rpmem out-of-band client connection handle
  */
 struct rpmem_obc {
-	char *node;		/* target node */
-	char *service;		/* target node service */
-
 	struct rpmem_ssh *ssh;
 };
 
@@ -81,14 +78,14 @@ static int
 rpmem_obc_check_ibc_attr(struct rpmem_msg_ibc_attr *ibc)
 {
 	if (ibc->port == 0 || ibc->port > UINT16_MAX) {
-		RPMEM_LOG(ERR, "invalid port number -- %u", ibc->port);
+		ERR("invalid port number received -- %u", ibc->port);
 		errno = EPROTO;
 		return -1;
 	}
 
 	if (ibc->persist_method != RPMEM_PM_GPSPM &&
 		ibc->persist_method != RPMEM_PM_APM) {
-		RPMEM_LOG(ERR, "invalid persistency method -- %u",
+		ERR("invalid persistency method received -- %u",
 				ibc->persist_method);
 		errno = EPROTO;
 		return -1;
@@ -101,31 +98,31 @@ rpmem_obc_check_ibc_attr(struct rpmem_msg_ibc_attr *ibc)
  * rpmem_obc_check_port -- (internal) verify target node port number
  */
 static int
-rpmem_obc_check_port(struct rpmem_obc *rpc)
+rpmem_obc_check_port(const struct rpmem_target_info *info)
 {
-	if (!rpc->service)
+	if (!(info->flags & RPMEM_HAS_SERVICE))
 		return 0;
 
-	if (*rpc->service == '\0') {
-		ERR("invalid port number -- '%s'", rpc->service);
+	if (*info->service == '\0') {
+		ERR("invalid port number -- '%s'", info->service);
 		goto err;
 	}
 
 	errno = 0;
 	char *endptr;
-	long port = strtol(rpc->service, &endptr, 10);
+	long port = strtol(info->service, &endptr, 10);
 	if (errno || *endptr != '\0') {
-		ERR("invalid port number -- '%s'", rpc->service);
+		ERR("invalid port number -- '%s'", info->service);
 		goto err;
 	}
 
 	if (port < 1) {
-		ERR("port number must be positive -- '%s'", rpc->service);
+		ERR("port number must be positive -- '%s'", info->service);
 		goto err;
 	}
 
 	if (port > UINT16_MAX) {
-		ERR("port number too large -- '%s'", rpc->service);
+		ERR("port number too large -- '%s'", info->service);
 		goto err;
 	}
 
@@ -144,8 +141,6 @@ rpmem_obc_close_conn(struct rpmem_obc *rpc)
 	rpmem_ssh_close(rpc->ssh);
 
 	rpc->ssh = NULL;
-	free(rpc->node);
-	rpc->node = NULL;
 }
 
 /*
@@ -186,7 +181,7 @@ rpmem_obc_alloc_create_msg(const struct rpmem_req_attr *req,
 	size_t msg_size = sizeof(struct rpmem_msg_create) + pool_desc_size;
 	struct rpmem_msg_create *msg = malloc(msg_size);
 	if (!msg) {
-		RPMEM_LOG(ERR, "!cannot allocate create request message");
+		ERR("!cannot allocate create request message");
 		return NULL;
 	}
 
@@ -201,7 +196,12 @@ rpmem_obc_alloc_create_msg(const struct rpmem_req_attr *req,
 	rpmem_obc_set_pool_desc(&msg->pool_desc,
 			req->pool_desc, pool_desc_size);
 
-	memcpy(&msg->pool_attr, pool_attr, sizeof(msg->pool_attr));
+	if (pool_attr) {
+		memcpy(&msg->pool_attr, pool_attr, sizeof(msg->pool_attr));
+	} else {
+		RPMEM_LOG(INFO, "using zeroed pool attributes");
+		memset(&msg->pool_attr, 0, sizeof(msg->pool_attr));
+	}
 
 	*msg_sizep = msg_size;
 	return msg;
@@ -214,7 +214,7 @@ static int
 rpmem_obc_check_req(const struct rpmem_req_attr *req)
 {
 	if (req->provider >= MAX_RPMEM_PROV) {
-		RPMEM_LOG(ERR, "invalid provider");
+		ERR("invalid provider specified -- %u", req->provider);
 		errno = EINVAL;
 		return -1;
 	}
@@ -230,27 +230,26 @@ rpmem_obc_check_hdr_resp(struct rpmem_msg_hdr_resp *resp,
 	enum rpmem_msg_type type, size_t size)
 {
 	if (resp->type != type) {
-		RPMEM_LOG(ERR, "invalid message type -- %u", resp->type);
+		ERR("invalid message type received -- %u", resp->type);
 		errno = EPROTO;
 		return -1;
 	}
 
 	if (resp->size != size) {
-		RPMEM_LOG(ERR, "invalid message size -- %lu", resp->size);
+		ERR("invalid message size received -- %lu", resp->size);
 		errno = EPROTO;
 		return -1;
 	}
 
 	if (resp->status >= MAX_RPMEM_ERR) {
-		RPMEM_LOG(ERR, "invalid status -- %u", resp->status);
+		ERR("invalid status received -- %u", resp->status);
 		errno = EPROTO;
 		return -1;
 	}
 
 	if (resp->status) {
 		enum rpmem_err status = (enum rpmem_err)resp->status;
-		RPMEM_LOG(ERR, "request failed: %s",
-			rpmem_util_proto_errstr(status));
+		ERR("%s", rpmem_util_proto_errstr(status));
 		errno = rpmem_util_proto_errno(status);
 		return -1;
 	}
@@ -300,7 +299,7 @@ rpmem_obc_alloc_open_msg(const struct rpmem_req_attr *req,
 	size_t msg_size = sizeof(struct rpmem_msg_open) + pool_desc_size;
 	struct rpmem_msg_open *msg = malloc(msg_size);
 	if (!msg) {
-		RPMEM_LOG(ERR, "!cannot allocate open request message");
+		ERR("!cannot allocate open request message");
 		return NULL;
 	}
 
@@ -373,7 +372,6 @@ rpmem_obc_init(void)
 void
 rpmem_obc_fini(struct rpmem_obc *rpc)
 {
-	ASSERTeq(rpc->node, NULL);
 	free(rpc);
 }
 
@@ -382,45 +380,28 @@ rpmem_obc_fini(struct rpmem_obc *rpc)
  *
  * Connects to target node, the target must be in the following format:
  * <addr>[:<port>]. If the port number is not specified the default
- * will be used (= RPMEM_PORT). The <addr> is translated into IP address.
+ * ssh port will be used. The <addr> is translated into IP address.
  *
  * Returns an error if connection is already established.
  */
 int
-rpmem_obc_connect(struct rpmem_obc *rpc, const char *target)
+rpmem_obc_connect(struct rpmem_obc *rpc, const struct rpmem_target_info *info)
 {
 	if (rpmem_obc_is_connected(rpc)) {
 		errno = EALREADY;
 		goto err_notconnected;
 	}
 
-	rpc->node = strdup(target);
-	if (!rpc->node) {
-		RPMEM_LOG(ERR, "!strdup target failed");
-		goto err_strdup;
-	}
-
-	char *colon = strrchr(rpc->node, ':');
-	if (colon) {
-		rpc->service = colon + 1;
-		*colon = '\0';
-	} else {
-		rpc->service = NULL;
-	}
-
-	if (rpmem_obc_check_port(rpc))
+	if (rpmem_obc_check_port(info))
 		goto err_port;
 
-	rpc->ssh = rpmem_ssh_open(rpc->node, rpc->service);
+	rpc->ssh = rpmem_ssh_open(info);
 	if (!rpc->ssh)
 		goto err_ssh_open;
 
 	return 0;
 err_ssh_open:
 err_port:
-	free(rpc->node);
-	rpc->node = NULL;
-err_strdup:
 err_notconnected:
 	return -1;
 }
@@ -483,7 +464,7 @@ rpmem_obc_create(struct rpmem_obc *rpc,
 	const struct rpmem_pool_attr *pool_attr)
 {
 	if (!rpmem_obc_is_connected(rpc)) {
-		RPMEM_LOG(ERR, "not connected");
+		ERR("out-of-band connection not established");
 		errno = ENOTCONN;
 		goto err_notconnected;
 	}
@@ -497,19 +478,25 @@ rpmem_obc_create(struct rpmem_obc *rpc,
 	if (!msg)
 		goto err_alloc_msg;
 
+	RPMEM_LOG(INFO, "sending create request message");
+
 	rpmem_hton_msg_create(msg);
 	if (rpmem_ssh_send(rpc->ssh, msg, msg_size)) {
-		RPMEM_LOG(ERR, "!sending create request message failed");
+		ERR("!sending create request message failed");
 		goto err_msg_send;
 	}
 
-	struct rpmem_msg_create_resp resp;
+	RPMEM_LOG(NOTICE, "create request message sent");
+	RPMEM_LOG(INFO, "receiving create request response");
 
+	struct rpmem_msg_create_resp resp;
 	if (rpmem_ssh_recv(rpc->ssh, &resp,
 			sizeof(resp))) {
-		RPMEM_LOG(ERR, "!receiving create request response failed");
+		ERR("!receiving create request response failed");
 		goto err_msg_recv;
 	}
+
+	RPMEM_LOG(NOTICE, "create request response received");
 
 	rpmem_ntoh_msg_create_resp(&resp);
 
@@ -542,6 +529,7 @@ rpmem_obc_open(struct rpmem_obc *rpc,
 	struct rpmem_pool_attr *pool_attr)
 {
 	if (!rpmem_obc_is_connected(rpc)) {
+		ERR("out-of-band connection not established");
 		errno = ENOTCONN;
 		goto err_notconnected;
 	}
@@ -555,18 +543,24 @@ rpmem_obc_open(struct rpmem_obc *rpc,
 	if (!msg)
 		goto err_alloc_msg;
 
-	rpmem_hton_msg_open(msg);
+	RPMEM_LOG(INFO, "sending open request message");
 
+	rpmem_hton_msg_open(msg);
 	if (rpmem_ssh_send(rpc->ssh, msg, msg_size)) {
-		RPMEM_LOG(ERR, "!sending open request message failed");
+		ERR("!sending open request message failed");
 		goto err_msg_send;
 	}
 
+	RPMEM_LOG(NOTICE, "open request message sent");
+	RPMEM_LOG(INFO, "receiving open request response");
+
 	struct rpmem_msg_open_resp resp;
 	if (rpmem_ssh_recv(rpc->ssh, &resp, sizeof(resp))) {
-		RPMEM_LOG(ERR, "!receiving open request response failed");
+		ERR("!receiving open request response failed");
 		goto err_msg_recv;
 	}
+
+	RPMEM_LOG(NOTICE, "open request response received");
 
 	rpmem_ntoh_msg_open_resp(&resp);
 
@@ -574,7 +568,8 @@ rpmem_obc_open(struct rpmem_obc *rpc,
 		goto err_msg_resp;
 
 	rpmem_obc_get_res(res, &resp.ibc);
-	memcpy(pool_attr, &resp.pool_attr, sizeof(*pool_attr));
+	if (pool_attr)
+		memcpy(pool_attr, &resp.pool_attr, sizeof(*pool_attr));
 
 	free(msg);
 	return 0;
@@ -608,12 +603,16 @@ rpmem_obc_close(struct rpmem_obc *rpc)
 	struct rpmem_msg_close msg;
 	rpmem_obc_set_msg_hdr(&msg.hdr, RPMEM_MSG_TYPE_CLOSE, sizeof(msg));
 
-	rpmem_hton_msg_close(&msg);
+	RPMEM_LOG(INFO, "sending close request message");
 
+	rpmem_hton_msg_close(&msg);
 	if (rpmem_ssh_send(rpc->ssh, &msg, sizeof(msg))) {
 		RPMEM_LOG(ERR, "!sending close request failed");
 		return -1;
 	}
+
+	RPMEM_LOG(NOTICE, "close request message sent");
+	RPMEM_LOG(INFO, "receiving close request response");
 
 	struct rpmem_msg_close_resp resp;
 	if (rpmem_ssh_recv(rpc->ssh, &resp,
@@ -621,6 +620,8 @@ rpmem_obc_close(struct rpmem_obc *rpc)
 		RPMEM_LOG(ERR, "!receiving close request response failed");
 		return -1;
 	}
+
+	RPMEM_LOG(NOTICE, "close request response received");
 
 	rpmem_ntoh_msg_close_resp(&resp);
 

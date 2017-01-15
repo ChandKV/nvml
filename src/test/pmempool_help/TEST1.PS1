@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,13 +39,11 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_help\TEST1"
 $Env:UNITTEST_NUM = "1"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
@@ -58,12 +56,12 @@ rm $LOG -Force -Recurse -ea si
 foreach($cmd in "info","dump","create","check") {
 	rm help_${cmd}.log -Force -ea si
     rm ${cmd}_help.log -Force -ea si
-	expect_normal_exit $PMEMPOOL$Env:EXESUFFIX help $cmd >> help_${cmd}.log
-	expect_normal_exit $PMEMPOOL$Env:EXESUFFIX ${cmd} --help >> ${cmd}_help.log
+	expect_normal_exit $PMEMPOOL help $cmd >> help_${cmd}.log
+	expect_normal_exit $PMEMPOOL ${cmd} --help >> ${cmd}_help.log
 	compare-object (get-content help_${cmd}.log) (get-content ${cmd}_help.log) >> $LOG
 }
 
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX help help >> $LOG
+expect_normal_exit $PMEMPOOL help help >> $LOG
 
 check
 

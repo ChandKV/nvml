@@ -1,5 +1,5 @@
 #
-# Copyright 2015-2016, Intel Corporation
+# Copyright 2016, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,65 +30,64 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 #
-# pmempool_rm/TEST2 -- test for pmempool rm
+# pmempool_rm/TEST2.PS1 -- test for pmempool rm
 #
 [CmdletBinding(PositionalBinding=$false)]
 Param(
     [alias("d")]
     $DIR = ""
     )
-$Env:UNITTEST_NAME = "pmempool_rm\TEST3w"
-$Env:UNITTEST_NUM = "3w"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+$Env:UNITTEST_NAME = "pmempool_rm\TEST2w"
+$Env:UNITTEST_NUM = "2w"
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
 setup
 
 $LOG="out$Env:UNITTEST_NUM.log"
+remove_files $LOG
 
-rm $LOG -Force -Recurse -ea si
+# Create poolset with replica
+create_poolset $DIR\pool.set 32M:$DIR\pool.part1:x 32M:$DIR\pool.part2:x `
+	R 32M:$DIR\rep.part1 32M:$DIR\rep.part2
 
-#XXX: port poolsets tests
-#
-## Create poolset with replica
-#create_poolset $DIR/pool.set 32M:$DIR/pool.part1:x 32M:$DIR/pool.part2:x\
-#	R 32M:$DIR/rep.part1 32M:$DIR/rep.part2
-#
-## Check if pool set file exists
-#check_files\
-#	$DIR/pool.set
-#
-## Check if all pools don't exist
-#check_no_files\
-#	$DIR/pool.obj\
-#	$DIR/pool.part1\
-#	$DIR/pool.part2\
-#	$DIR/rep.part1\
-#	$DIR/rep.part2
-#
-## Try to remove files without force flag
-#expect_abnormal_exit $PMEMPOOL$Env:EXESUFFIX rm -v $DIR/pool.obj >> $LOG 2>&1
-#expect_abnormal_exit $PMEMPOOL$Env:EXESUFFIX rm -sv $DIR/pool.set >> $LOG 2>&1
-## Try to remove files with force flag
-#expect_normal_exit $PMEMPOOL$Env:EXESUFFIX rm -fv\
-#	$DIR/pool.obj\
-#	$DIR/pool.set >> $LOG 2>&1
-#
-#check_no_files\
-#	$DIR/pool.set\
-#	$DIR/pool.obj\
-#	$DIR/pool.part1\
-#	$DIR/pool.part2\
-#	$DIR/rep.part1\
-#	$DIR/rep.part2
-#
-#check
-#
+# Check if pool set file exists
+check_files `
+	$DIR\pool.set
+
+# Check if all pools don't exist
+check_no_files `
+	$DIR\pool.obj `
+	$DIR\pool.part1 `
+	$DIR\pool.part2 `
+	$DIR\rep.part1 `
+	$DIR\rep.part2
+
+# Try to remove files without force flag
+expect_abnormal_exit $PMEMPOOL rm -v $DIR\pool.obj 2>&1 | out-file -width 1024 $LOG
+expect_abnormal_exit $PMEMPOOL rm -sv $DIR\pool.set 2>&1 | out-file -append -width 1024 $LOG
+
+# Try to remove files with force flag
+expect_normal_exit $PMEMPOOL rm -fv `
+	$DIR\pool.obj `
+	$DIR\pool.set >> $LOG 2>&1
+
+check_no_files `
+	$DIR\pool.set `
+	$DIR\pool.obj `
+	$DIR\pool.part1 `
+	$DIR\pool.part2 `
+	$DIR\rep.part1 `
+	$DIR\rep.part2
+
+Get-Content $LOG | Where-Object { $_ -match 'remove' } > tmp$LOG
+Get-Content tmp$LOG | Where-Object { $_ -notmatch 'CategoryInfo' }  > $LOG
+remove_files tmp$LOG
+
+check
+
 pass

@@ -105,6 +105,7 @@ check_data_alloc(void)
 		return NULL;
 	}
 
+	memset(&data->step_data, 0, sizeof(struct check_step_data));
 	data->check_status_cache = NULL;
 	data->error = NULL;
 	data->step = 0;
@@ -346,24 +347,23 @@ check_status_create(PMEMpoolcheck *ppc, enum pmempool_check_msg_type type,
 		return 0;
 
 	struct check_status *st = status_alloc();
+	ASSERT(CHECK_IS(ppc, FORMAT_STR));
 
-	if (CHECK_IS(ppc, FORMAT_STR)) {
-		va_list ap;
-		va_start(ap, fmt);
-		int p = vsnprintf(st->msg, MAX_MSG_STR_SIZE, fmt, ap);
-		va_end(ap);
+	va_list ap;
+	va_start(ap, fmt);
+	int p = vsnprintf(st->msg, MAX_MSG_STR_SIZE, fmt, ap);
+	va_end(ap);
 
-		/* append possible strerror at the end of the message */
-		if (type != PMEMPOOL_CHECK_MSG_TYPE_QUESTION && errno &&
-				p > 0) {
-			char buff[UTIL_MAX_ERR_MSG];
-			util_strerror(errno, buff, UTIL_MAX_ERR_MSG);
-			snprintf(st->msg + p, MAX_MSG_STR_SIZE - (size_t)p,
-				": %s", buff);
-		}
-
-		st->status.type = type;
+	/* append possible strerror at the end of the message */
+	if (type != PMEMPOOL_CHECK_MSG_TYPE_QUESTION && errno &&
+			p > 0) {
+		char buff[UTIL_MAX_ERR_MSG];
+		util_strerror(errno, buff, UTIL_MAX_ERR_MSG);
+		snprintf(st->msg + p, MAX_MSG_STR_SIZE - (size_t)p,
+			": %s", buff);
 	}
+
+	st->status.type = type;
 
 	return status_push(ppc, st, question);
 }

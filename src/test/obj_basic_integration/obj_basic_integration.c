@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -414,7 +414,7 @@ test_tx_api(PMEMobjpool *pop)
 
 	int *vstate = NULL; /* volatile state */
 
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		vstate = (int *)MALLOC(sizeof(*vstate));
 		*vstate = TEST_VALUE;
 		TX_ADD(root);
@@ -428,7 +428,7 @@ test_tx_api(PMEMobjpool *pop)
 	UT_ASSERTeq(vstate, NULL);
 	UT_ASSERTeq(D_RW(root)->value, TEST_VALUE);
 
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		TX_ADD(root);
 		D_RW(root)->node = TX_ALLOC(struct dummy_node, SIZE_MAX);
 		UT_ASSERT(0); /* should not get to this point */
@@ -438,7 +438,7 @@ test_tx_api(PMEMobjpool *pop)
 	} TX_END
 
 	errno = 0;
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		D_RW(root)->node = TX_ZALLOC(struct dummy_node, SIZE_MAX);
 		UT_ASSERT(0); /* should not get to this point */
 	} TX_ONABORT {
@@ -447,7 +447,17 @@ test_tx_api(PMEMobjpool *pop)
 	} TX_END
 
 	errno = 0;
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
+		D_RW(root)->node = TX_XALLOC(struct dummy_node, SIZE_MAX,
+				POBJ_XALLOC_ZERO);
+		UT_ASSERT(0); /* should not get to this point */
+	} TX_ONABORT {
+		UT_ASSERT(TOID_IS_NULL(D_RO(root)->node));
+		UT_ASSERTeq(errno, ENOMEM);
+	} TX_END
+
+	errno = 0;
+	TX_BEGIN_LOCK(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		D_RW(root)->node = TX_ALLOC(struct dummy_node,
 			PMEMOBJ_MAX_ALLOC_SIZE + 1);
 		UT_ASSERT(0); /* should not get to this point */
@@ -457,7 +467,7 @@ test_tx_api(PMEMobjpool *pop)
 	} TX_END
 
 	errno = 0;
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		D_RW(root)->node = TX_ZALLOC(struct dummy_node,
 			PMEMOBJ_MAX_ALLOC_SIZE + 1);
 		UT_ASSERT(0); /* should not get to this point */
@@ -467,7 +477,7 @@ test_tx_api(PMEMobjpool *pop)
 	} TX_END
 
 	errno = 0;
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		TX_ADD(root);
 		D_RW(root)->node = TX_ZNEW(struct dummy_node);
 		TX_REALLOC(D_RO(root)->node, SIZE_MAX);
@@ -478,7 +488,7 @@ test_tx_api(PMEMobjpool *pop)
 	UT_ASSERT(TOID_IS_NULL(D_RO(root)->node));
 
 	errno = 0;
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		TX_ADD(root);
 		D_RW(root)->node = TX_ZNEW(struct dummy_node);
 		TX_REALLOC(D_RO(root)->node, PMEMOBJ_MAX_ALLOC_SIZE + 1);
@@ -489,7 +499,7 @@ test_tx_api(PMEMobjpool *pop)
 	UT_ASSERT(TOID_IS_NULL(D_RO(root)->node));
 
 	errno = 0;
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		TX_ADD(root);
 		D_RW(root)->node = TX_ZNEW(struct dummy_node);
 		TX_MEMSET(D_RW(D_RW(root)->node)->teststr, 'a', TEST_STR_LEN);
@@ -501,7 +511,7 @@ test_tx_api(PMEMobjpool *pop)
 	UT_ASSERT(strncmp(D_RW(D_RW(root)->node)->teststr, TEST_STR,
 		TEST_STR_LEN) == 0);
 
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX, &D_RW(root)->lock) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX, &D_RW(root)->lock) {
 		TX_ADD(root);
 		UT_ASSERT(!TOID_IS_NULL(D_RW(root)->node));
 		TX_FREE(D_RW(root)->node);
@@ -590,10 +600,18 @@ main(int argc, char *argv[])
 
 	if ((pop = pmemobj_open(path, POBJ_LAYOUT_NAME(basic))) == NULL)
 		UT_FATAL("!pmemobj_open: %s", path);
+
+	/* second open should fail, checks file locking */
+	if ((pmemobj_open(path, POBJ_LAYOUT_NAME(basic))) != NULL)
+		UT_FATAL("!pmemobj_open: %s", path);
+
 	pmemobj_close(pop);
 
-	if (pmemobj_check(path, POBJ_LAYOUT_NAME(basic)) != 1)
-		UT_FATAL("!pmemobj_check: %s", path);
+	int result = pmemobj_check(path, POBJ_LAYOUT_NAME(basic));
+	if (result < 0)
+		UT_OUT("!%s: pmemobj_check", path);
+	else if (result == 0)
+		UT_OUT("%s: pmemobj_check: not consistent", path);
 
 	DONE(NULL);
 }

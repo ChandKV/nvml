@@ -46,11 +46,15 @@ DIRS = \
        pmemdetect\
        ctrld\
        bttcreate\
-       fip
+       fip\
+       ddmap
 
 REMOTE_TOOLS = \
 	ctrld\
-	fip
+	fip\
+	pmemobjcli\
+	pmemspoil\
+	pmemdetect
 
 all     : TARGET = all
 clean   : TARGET = clean

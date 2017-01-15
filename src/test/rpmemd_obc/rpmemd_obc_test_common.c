@@ -247,17 +247,16 @@ clnt_wait_disconnect(struct rpmem_ssh *ssh)
 struct rpmem_ssh *
 clnt_connect(char *target)
 {
-	char *node = STRDUP(target);
-	char *service = strrchr(node, ':');
-	if (service) {
-		*service = '\0';
-		service++;
-	}
 
-	struct rpmem_ssh *ssh = rpmem_ssh_open(node, service);
+	struct rpmem_target_info *info;
+	info = rpmem_target_parse(target);
+	UT_ASSERTne(info, NULL);
+
+	struct rpmem_ssh *ssh = rpmem_ssh_open(info);
 	UT_ASSERTne(ssh, NULL);
 
-	FREE(node);
+	rpmem_target_free(info);
+
 	return ssh;
 }
 
@@ -267,8 +266,7 @@ clnt_connect(char *target)
 void
 clnt_close(struct rpmem_ssh *ssh)
 {
-	int ret = rpmem_ssh_close(ssh);
-	UT_ASSERTeq(ret, 0);
+	rpmem_ssh_close(ssh);
 }
 
 /*

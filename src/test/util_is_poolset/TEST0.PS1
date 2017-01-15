@@ -1,5 +1,5 @@
-﻿#
-# Copyright 2015-2016, Intel Corporation
+#
+# Copyright 2015-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -43,21 +43,19 @@ Param(
     )
 $Env:UNITTEST_NAME = "util_is_poolset\TEST0"
 $Env:UNITTEST_NUM = "0"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 # standard unit test setup
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
 setup
 
 create_poolset $DIR\pool.set 32K:$DIR\testfile:x
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create obj $DIR\pool.obj
+expect_normal_exit $PMEMPOOL create obj $DIR\pool.obj
 
 Set-Content -Path $DIR\not_pool.set -Value "NON_PMEMPOOLSET"
 Set-Content -Path $DIR\too_short.set -Value "PMEMPOOL"

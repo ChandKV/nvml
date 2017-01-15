@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,6 +46,7 @@
  *   n - write out number of available blocks
  */
 
+#include <ex_common.h>
 #include <sys/stat.h>
 #include <string.h>
 #include <stdio.h>
@@ -59,7 +60,7 @@
 
 #define USABLE_SIZE (9.0 / 10)
 #define POOL_SIZE ((size_t)(1024 * 1024 * 50))
-#define MAX_POOL_SIZE ((size_t)(1024L * 1024 * 1024 * 16))
+#define MAX_POOL_SIZE ((size_t)1024 * 1024 * 1024 * 16)
 #define MAX_THREADS 256
 #define BSIZE_MAX ((size_t)(1024 * 1024 * 10))
 
@@ -98,7 +99,7 @@ pmemblk_map(PMEMobjpool *pop, size_t bsize, size_t fsize)
 	TX_BEGIN(pop) {
 		TX_ADD(bp);
 		D_RW(bp)->bsize = bsize;
-		size_t pool_size = fsize * USABLE_SIZE;
+		size_t pool_size = (size_t)(fsize * USABLE_SIZE);
 		D_RW(bp)->nblocks = pool_size / bsize;
 		D_RW(bp)->data = TX_ZALLOC(uint8_t, pool_size);
 	} TX_ONABORT {
@@ -206,7 +207,7 @@ pmemblk_read(PMEMblkpool *pbp, void *buf, long long blockno)
 	TOID(struct base) bp;
 	bp = POBJ_ROOT(pop, struct base);
 
-	if (blockno >= D_RO(bp)->nblocks)
+	if (blockno >= (long long)D_RO(bp)->nblocks)
 		return 1;
 
 	pmemobj_mutex_lock(pop, &D_RW(bp)->locks[blockno % MAX_THREADS]);
@@ -229,11 +230,11 @@ pmemblk_write(PMEMblkpool *pbp, const void *buf, long long blockno)
 	TOID(struct base) bp;
 	bp = POBJ_ROOT(pop, struct base);
 
-	if (blockno >= D_RO(bp)->nblocks)
+	if (blockno >= (long long)D_RO(bp)->nblocks)
 		return 1;
 
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX,
-		&D_RW(bp)->locks[blockno % MAX_THREADS], TX_LOCK_NONE) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX,
+		&D_RW(bp)->locks[blockno % MAX_THREADS], TX_PARAM_NONE) {
 		size_t block_off = blockno * D_RO(bp)->bsize;
 		uint8_t *dst = D_RW(D_RW(bp)->data) + block_off;
 		/* add the modified block to the undo log */
@@ -257,11 +258,11 @@ pmemblk_set_zero(PMEMblkpool *pbp, long long blockno)
 	TOID(struct base) bp;
 	bp = POBJ_ROOT(pop, struct base);
 
-	if (blockno >= D_RO(bp)->nblocks)
+	if (blockno >= (long long)D_RO(bp)->nblocks)
 		return 1;
 
-	TX_BEGIN_LOCK(pop, TX_LOCK_MUTEX,
-		&D_RW(bp)->locks[blockno % MAX_THREADS], TX_LOCK_NONE) {
+	TX_BEGIN_PARAM(pop, TX_PARAM_MUTEX,
+		&D_RW(bp)->locks[blockno % MAX_THREADS], TX_PARAM_NONE) {
 		size_t block_off = blockno * D_RO(bp)->bsize;
 		uint8_t *dst = D_RW(D_RW(bp)->data) + block_off;
 		pmemobj_tx_add_range_direct(dst, D_RO(bp)->bsize);
@@ -288,7 +289,7 @@ main(int argc, char *argv[])
 	PMEMblkpool *pbp;
 	if (strncmp(argv[1], "c", 1) == 0) {
 		pbp = pmemblk_create(argv[2], bsize, POOL_SIZE,
-			S_IRUSR | S_IWUSR);
+			CREATE_MODE_RW);
 	} else if (strncmp(argv[1], "o", 1) == 0) {
 		pbp = pmemblk_open(argv[2], bsize);
 	} else {
@@ -319,7 +320,7 @@ main(int argc, char *argv[])
 			}
 			case 'r': {
 				printf("read: %s\n", argv[i] + 2);
-				char *buf = malloc(bsize + 1);
+				char *buf = (char *)malloc(bsize + 1);
 				assert(buf != NULL);
 				const char *block_str = strtok(argv[i] + 2,
 							":");

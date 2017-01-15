@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,13 +39,11 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_create\TEST2"
 $Env:UNITTEST_NUM = "2"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
@@ -55,21 +53,21 @@ $POOL="$DIR\file.pool"
 $SIZE=(1024 + 512) * 1024 * 1024
 
 # PMEMBLK
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -s $SIZE blk 512 $POOL
+expect_normal_exit $PMEMPOOL create -s $SIZE blk 512 $POOL
 check_file $POOL
 check_signature PMEMBLK $POOL
 check_size $SIZE $POOL
 
 # PMEMLOG
 rm $POOL
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -s $SIZE log $POOL
+expect_normal_exit $PMEMPOOL create -s $SIZE log $POOL
 check_file $POOL
 check_signature PMEMLOG $POOL
 check_size $SIZE $POOL
 
 #PMEMOBJ
 rm $POOL
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -s $SIZE obj $POOL
+expect_normal_exit $PMEMPOOL create -s $SIZE obj $POOL
 check_file $POOL
 check_signature PMEMOBJ $POOL
 check_layout "" $POOL

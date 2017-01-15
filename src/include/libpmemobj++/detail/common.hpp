@@ -45,6 +45,12 @@
 namespace nvml
 {
 
+namespace obj
+{
+template <typename T>
+class persistent_ptr;
+}
+
 namespace detail
 {
 
@@ -60,11 +66,11 @@ template <typename T>
 inline void
 conditional_add_to_tx(const T *that)
 {
-	/* 'that' is not in any open pool */
-	if (!pmemobj_pool_by_ptr(that))
+	if (pmemobj_tx_stage() != TX_STAGE_WORK)
 		return;
 
-	if (pmemobj_tx_stage() != TX_STAGE_WORK)
+	/* 'that' is not in any open pool */
+	if (!pmemobj_pool_by_ptr(that))
 		return;
 
 	if (pmemobj_tx_add_range_direct(that, sizeof(*that)))
@@ -73,10 +79,32 @@ conditional_add_to_tx(const T *that)
 }
 
 /*
+ * Conditionally add an object to a transaction.
+ *
+ * Adds `*that` to the transaction if it is within a pmemobj pool and
+ * there is an active transaction. Does nothing otherwise.
+ *
+ * @param[in] that persistent pointer to the object being added to the
+ * transaction. This has to be a persistent pointer to the start of an
+ * allocation and not in the middle of it.
+ */
+template <typename T>
+inline void
+conditional_add_to_tx(const obj::persistent_ptr<T> &that)
+{
+	if (pmemobj_tx_stage() != TX_STAGE_WORK)
+		return;
+
+	if (pmemobj_tx_add_range(that.raw(), 0, sizeof(T)))
+		throw transaction_error("Could not add an object to the"
+					" transaction.");
+}
+
+/*
  * Return type number for given type.
  */
 template <typename T>
-constexpr uint64_t
+uint64_t
 type_num()
 {
 	return typeid(T).hash_code();

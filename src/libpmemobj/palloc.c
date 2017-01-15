@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,11 +38,12 @@
  * in a reasonable time and with an acceptable common-case fragmentation.
  */
 
+#include "valgrind_internal.h"
 #include "heap_layout.h"
 #include "heap.h"
 #include "out.h"
+#include "sys_util.h"
 #include "palloc.h"
-#include "valgrind_internal.h"
 
 /*
  * Number of bytes between beginning of memory block and beginning of user data.
@@ -191,8 +192,8 @@ alloc_prep_block(struct palloc_heap *heap, struct memory_block m,
 
 	uint64_t real_size = unit_size * m.size_idx;
 
-	ASSERT((uint64_t)block_data % _POBJ_CL_ALIGNMENT == 0);
-	ASSERT((uint64_t)userdatap % _POBJ_CL_ALIGNMENT == 0);
+	ASSERT((uint64_t)block_data % ALLOC_BLOCK_SIZE == 0);
+	ASSERT((uint64_t)userdatap % ALLOC_BLOCK_SIZE == 0);
 
 	/* mark everything (including headers) as accessible */
 	VALGRIND_DO_MAKE_MEM_UNDEFINED(block_data, real_size);
@@ -284,6 +285,16 @@ palloc_operation(struct palloc_heap *heap,
 	struct memory_block new_block = {0, 0, 0, 0};
 	struct memory_block reclaimed_block = {0, 0, 0, 0};
 
+	int ret = 0;
+
+	/*
+	 * These two lock are responsible for protecting the metadata for the
+	 * persistent representation of a chunk. Depending on the operation and
+	 * the type of a chunk, they might be NULL.
+	 */
+	pthread_mutex_t *existing_block_lock = NULL;
+	pthread_mutex_t *new_block_lock = NULL;
+
 	size_t sizeh = size + sizeof(struct allocation_header);
 
 	/*
@@ -294,6 +305,26 @@ palloc_operation(struct palloc_heap *heap,
 	 */
 	if (off != 0) {
 		alloc = ALLOC_GET_HEADER(heap, off);
+		existing_block = get_mblock_from_alloc(heap, alloc);
+		/*
+		 * This lock must be held until the operation is processed
+		 * successfully, because other threads might operate on the
+		 * same bitmap value.
+		 */
+		existing_block_lock = MEMBLOCK_OPS(AUTO, &existing_block)->
+				get_lock(&existing_block, heap);
+		if (existing_block_lock != NULL)
+			util_mutex_lock(existing_block_lock);
+
+#ifdef DEBUG
+		if (MEMBLOCK_OPS(AUTO,
+			&existing_block)->get_state(&existing_block, heap) !=
+				MEMBLOCK_ALLOCATED) {
+			ERR("Double free or heap corruption");
+			ASSERT(0);
+		}
+#endif /* DEBUG */
+
 		/*
 		 * The memory block must return back to the originating bucket,
 		 * otherwise coalescing of neighbouring blocks will be rendered
@@ -308,18 +339,19 @@ palloc_operation(struct palloc_heap *heap,
 		 */
 		b = heap_get_chunk_bucket(heap, alloc->chunk_id,
 				alloc->zone_id);
-		existing_block = get_mblock_from_alloc(heap, alloc);
 	}
 
 	/* if allocation or reallocation, reserve new memory */
 	if (size != 0) {
 		/* reallocation to exactly the same size, which is a no-op */
 		if (alloc != NULL && alloc->size == sizeh)
-			return 0;
+			goto out;
 
 		errno = alloc_reserve_block(heap, &new_block, sizeh);
-		if (errno != 0)
-			return -1;
+		if (errno != 0) {
+			ret = -1;
+			goto out;
+		}
 	}
 
 
@@ -331,21 +363,6 @@ palloc_operation(struct palloc_heap *heap,
 
 	/* lock and persistently free the existing memory block */
 	if (!MEMORY_BLOCK_IS_EMPTY(existing_block)) {
-#ifdef DEBUG
-		if (!heap_block_is_allocated(heap, existing_block)) {
-			ERR("Double free or heap corruption");
-			ASSERT(0);
-		}
-#endif /* DEBUG */
-
-		/*
-		 * This lock must be held until the operation is processed
-		 * successfully, because other threads might operate on the
-		 * same bitmap value.
-		 */
-		MEMBLOCK_OPS(AUTO, &existing_block)->
-				lock(&existing_block, heap);
-
 		/*
 		 * This method will insert new entries into the operation
 		 * context which will, after processing, update the chunk
@@ -363,13 +380,6 @@ palloc_operation(struct palloc_heap *heap,
 	}
 
 	if (!MEMORY_BLOCK_IS_EMPTY(new_block)) {
-#ifdef DEBUG
-		if (heap_block_is_allocated(heap, new_block)) {
-			ERR("heap corruption");
-			ASSERT(0);
-		}
-#endif /* DEBUG */
-
 		if (alloc_prep_block(heap, new_block, constructor,
 				arg, &offset_value) != 0) {
 			/*
@@ -394,7 +404,8 @@ palloc_operation(struct palloc_heap *heap,
 					new_bucket, new_block);
 
 			errno = ECANCELED;
-			return -1;
+			ret = -1;
+			goto out;
 		}
 
 		/*
@@ -404,7 +415,24 @@ palloc_operation(struct palloc_heap *heap,
 		 * thread might operate on the same 8-byte value of the run
 		 * bitmap and override allocation performed by this thread.
 		 */
-		MEMBLOCK_OPS(AUTO, &new_block)->lock(&new_block, heap);
+		new_block_lock = MEMBLOCK_OPS(AUTO, &new_block)->
+			get_lock(&new_block, heap);
+
+		/* the locks might be identical in the case of realloc */
+		if (new_block_lock == existing_block_lock)
+			new_block_lock = NULL;
+
+		if (new_block_lock != NULL)
+			util_mutex_lock(new_block_lock);
+
+#ifdef DEBUG
+		if (MEMBLOCK_OPS(AUTO,
+			&new_block)->get_state(&new_block, heap) !=
+				MEMBLOCK_FREE) {
+			ERR("Double free or heap corruption");
+			ASSERT(0);
+		}
+#endif /* DEBUG */
 
 		/*
 		 * The actual required metadata modifications are chunk-type
@@ -413,7 +441,7 @@ palloc_operation(struct palloc_heap *heap,
 		 * changing a chunk type from free to used.
 		 */
 		MEMBLOCK_OPS(AUTO, &new_block)->prep_hdr(&new_block,
-				heap, HDR_OP_ALLOC, ctx);
+				heap, MEMBLOCK_ALLOCATED, ctx);
 	}
 
 	/* not in-place realloc */
@@ -447,17 +475,7 @@ palloc_operation(struct palloc_heap *heap,
 	 * but in some cases it might not be in-sync with the its transient
 	 * representation.
 	 */
-
-	if (!MEMORY_BLOCK_IS_EMPTY(new_block)) {
-		/* new block run lock */
-		MEMBLOCK_OPS(AUTO, &new_block)->unlock(&new_block, heap);
-	}
-
 	if (!MEMORY_BLOCK_IS_EMPTY(existing_block)) {
-		/* existing (freed) run lock */
-		MEMBLOCK_OPS(AUTO, &existing_block)->
-				unlock(&existing_block, heap);
-
 		VALGRIND_DO_MEMPOOL_FREE(heap->layout,
 			(char *)heap_get_block_data(heap, existing_block)
 			+ ALLOC_OFF);
@@ -473,12 +491,7 @@ palloc_operation(struct palloc_heap *heap,
 			 * before this operation started.
 			 */
 			CNT_OP(b, insert, heap, reclaimed_block);
-#ifdef DEBUG
-			if (heap_block_is_allocated(heap, reclaimed_block)) {
-				ERR("heap corruption");
-				ASSERT(0);
-			}
-#endif /* DEBUG */
+
 			/*
 			 * Degrading of a run means turning it back into a chunk
 			 * in case it's no longer needed.
@@ -494,7 +507,14 @@ palloc_operation(struct palloc_heap *heap,
 		}
 	}
 
-	return 0;
+out:
+	if (new_block_lock != NULL)
+		util_mutex_unlock(new_block_lock);
+
+	if (existing_block_lock != NULL)
+		util_mutex_unlock(existing_block_lock);
+
+	return ret;
 }
 
 /*
@@ -578,6 +598,15 @@ palloc_boot(struct palloc_heap *heap, void *heap_start, uint64_t heap_size,
 }
 
 /*
+ * palloc_buckets_init -- initialize buckets
+ */
+int
+palloc_buckets_init(struct palloc_heap *heap)
+{
+	return heap_buckets_init(heap);
+}
+
+/*
  * palloc_init -- initializes palloc heap
  */
 int
@@ -624,25 +653,42 @@ palloc_heap_cleanup(struct palloc_heap *heap)
 }
 
 #ifdef USE_VG_MEMCHECK
-/*
- * palloc_vg_register_object -- registers object in Valgrind
- */
-void
-palloc_vg_register_object(struct palloc_heap *heap, PMEMoid oid, size_t size)
-{
-	void *addr = pmemobj_direct(oid);
-	size_t headers = sizeof(struct allocation_header) + PALLOC_DATA_OFF;
 
-	VALGRIND_DO_MEMPOOL_ALLOC(heap->layout, addr, size);
-	VALGRIND_DO_MAKE_MEM_DEFINED((char *)addr - headers, size + headers);
+struct palloc_vg_args {
+	object_callback cb;
+	void *arg;
+	struct palloc_heap *heap;
+};
+
+/*
+ * palloc_vg_register_alloc -- (internal) registers allocation header
+ * in Valgrind
+ */
+static int
+palloc_vg_register_alloc(uint64_t off, void *arg)
+{
+	struct palloc_vg_args *args = arg;
+	struct allocation_header *alloc =
+		(void *)((uintptr_t)args->heap->base + off);
+
+	VALGRIND_DO_MAKE_MEM_DEFINED(alloc, sizeof(*alloc));
+
+	return args->cb(off + sizeof(*alloc), args->arg);
 }
 
 /*
  * palloc_heap_vg_open -- notifies Valgrind about heap layout
  */
 void
-palloc_heap_vg_open(void *heap_start, uint64_t heap_size)
+palloc_heap_vg_open(struct palloc_heap *heap, object_callback cb,
+	void *arg, int objects)
 {
-	heap_vg_open(heap_start, heap_size);
+	struct palloc_vg_args args = {
+		.cb = cb,
+		.arg = arg,
+		.heap = heap,
+	};
+
+	heap_vg_open(heap, palloc_vg_register_alloc, &args, objects);
 }
 #endif

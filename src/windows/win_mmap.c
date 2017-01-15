@@ -1,6 +1,7 @@
 /*
- * Copyright 2015-2016, Intel Corporation
- * Copyright (c) 2015-2016, Microsoft Corporation. All rights reserved.
+ * Copyright 2015-2017, Intel Corporation
+ * Copyright (c) 2015-2017, Microsoft Corporation. All rights reserved.
+ * Copyright (c) 2016, Hewlett Packard Enterprise Development LP
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -57,11 +58,12 @@
  */
 
 #include <sys/mman.h>
-#include <sys/queue.h>
 #include "mmap.h"
 #include "out.h"
+#include "win_mmap.h"
 
-#define roundup(x, y)	((((x) + ((y) - 1)) / (y)) * (y))
+/* uncomment for more debug information on mmap trackers */
+/* #define MMAP_DEBUG_INFO */
 
 NTSTATUS
 NtFreeVirtualMemory(_In_ HANDLE ProcessHandle, _Inout_ PVOID *BaseAddress,
@@ -73,85 +75,130 @@ unsigned long long Mmap_align;
 /* page size */
 unsigned long long Pagesize;
 
-/*
- * this structure tracks the file mappings outstanding per file handle
- */
-typedef struct FILE_MAPPING_TRACKER {
-	LIST_ENTRY(FILE_MAPPING_TRACKER) ListEntry;
-	HANDLE FileHandle;
-	HANDLE FileMappingHandle;
-	PVOID *BaseAddress;
-	PVOID *EndAddress;
-	DWORD Access;
-	off_t Offset;
-} *PFILE_MAPPING_TRACKER;
-
-HANDLE FileMappingListMutex = NULL;
-LIST_HEAD(FMLHead, FILE_MAPPING_TRACKER) FileMappingListHead =
-	LIST_HEAD_INITIALIZER(FileMappingListHead);
+HANDLE FileMappingQMutex = INVALID_HANDLE_VALUE;
+struct FMLHead FileMappingQHead =
+	SORTEDQ_HEAD_INITIALIZER(FileMappingQHead);
 
 /*
- * mmap_init -- (internal) load-time initialization of file mapping tracker
+ * LockFileMappingQ -- (internal) acquires the mapping list mutex
  *
- * Called automatically by the run-time loader.
- */
-static void
-mmap_init(void)
-{
-	LIST_INIT(&FileMappingListHead);
-
-	FileMappingListMutex = CreateMutex(NULL, FALSE, NULL);
-
-	SYSTEM_INFO si;
-	GetSystemInfo(&si);
-	Mmap_align = si.dwAllocationGranularity;
-	Pagesize = si.dwPageSize;
-}
-
-/*
- * mmap_fini -- (internal) file mapping tracker cleanup routine
+ * Note that this logic dove-tails with mmap_fini() to also detect
+ * race conditions around acquire while delete.
  *
- * Called automatically when the process terminates.
+ * Case 1: mmap_fini() fully called first - FileMappingQMutex will
+ *     be INVALID_HANDLE_VALUE and the WaitForSingleObject will fail.
+ * Case 2: mmap_fini() runs while this thread is blocked
+ *     in WaitForSingleObject - We will detect
+ *     FileMappingQMutex == INVALID_HANDLE_VALUE
+ *     E.g., Lock() by Thrd1, Thrd2 Lock by mmap_fini (blocked),
+ *     Thrd3 Lock (blocked); eventually map_fini runs before Thrd3.
+ * Case 3: Call to acquire is made before call to mmap_init or after map_fini.
+ *
+ * Note: WAIT_ABANDONED is treated as fatal, as no assumptions can be made
+ *     about the consistency of FileMappingQHead or its link list elements.
  */
-static void
-mmap_fini(void)
+static BOOL
+LockFileMappingQ(void)
 {
-	if (FileMappingListMutex == NULL)
-		return;
+	HANDLE Mutex = FileMappingQMutex;
 
-	/*
-	 * Let's make sure that no one is in the middle of updating the
-	 * list by grabbing the lock.  There is still a race condition
-	 * with someone coming in while we're tearing it down and trying
-	 */
-	WaitForSingleObject(FileMappingListMutex, INFINITE);
-	ReleaseMutex(FileMappingListMutex);
-	CloseHandle(FileMappingListMutex);
+	DWORD ret = WaitForSingleObject(FileMappingQMutex, INFINITE);
+	if (ret != WAIT_OBJECT_0)
+		FATAL("WaitForSingleObject failed");
 
-	while (!LIST_EMPTY(&FileMappingListHead)) {
-		PFILE_MAPPING_TRACKER mt;
-		mt = (PFILE_MAPPING_TRACKER)LIST_FIRST(&FileMappingListHead);
-
-		LIST_REMOVE(mt, ListEntry);
-
-		if (mt->BaseAddress != NULL)
-			UnmapViewOfFile(mt->BaseAddress);
-
-		if (mt->FileMappingHandle != NULL)
-			CloseHandle(mt->FileMappingHandle);
-
-		free(mt);
+	if (FileMappingQMutex == INVALID_HANDLE_VALUE) {
+		ERR("acquire-while-delete race error");
+		ReleaseMutex(Mutex);
+		return FALSE; /* XXX - FATAL() */
 	}
+
+	return TRUE;
 }
 
-#define PROT_ALL (PROT_READ|PROT_WRITE|PROT_EXEC)
+/*
+ * UnlockFileMappingQ -- (internal) releases the mapping list mutex
+ */
+static BOOL
+UnlockFileMappingQ(void)
+{
+	return ReleaseMutex(FileMappingQMutex);
+}
 
 /*
- * mfree_reservation -- (internal) frees the range that's previously reserved
+ * mmap_file_mapping_comparer -- (internal) compares the two file mapping
+ * trackers
+ */
+static LONG_PTR
+mmap_file_mapping_comparer(PFILE_MAPPING_TRACKER a, PFILE_MAPPING_TRACKER b)
+{
+	return ((LONG_PTR)a->BaseAddress - (LONG_PTR)b->BaseAddress);
+}
+
+#ifdef MMAP_DEBUG_INFO
+/*
+ * mmap_info -- (internal) dump info about all the maping trackers
+ */
+static void
+mmap_info(void)
+{
+	LOG(4, NULL);
+
+	WaitForSingleObject(FileMappingQMutex, INFINITE);
+
+	PFILE_MAPPING_TRACKER mt;
+	for (mt = SORTEDQ_FIRST(&FileMappingQHead);
+		mt != (void *)&FileMappingQHead;
+		mt = SORTEDQ_NEXT(mt, ListEntry)) {
+
+		LOG(4, "FH %08x FMH %08x AD %p-%p (%zu) "
+			"OF %08x FL %zu AC %d F %d",
+			mt->FileHandle,
+			mt->FileMappingHandle,
+			mt->BaseAddress,
+			mt->EndAddress,
+			(char *)mt->EndAddress - (char *)mt->BaseAddress,
+			mt->Offset,
+			mt->FileLen,
+			mt->Access,
+			mt->Flags);
+	}
+
+	ReleaseMutex(FileMappingQMutex);
+}
+#endif
+
+/*
+ * mmap_reserve -- (internal) reserve virtual address range
+ */
+static void *
+mmap_reserve(void *addr, size_t len)
+{
+	LOG(4, "addr %p len %zu", addr, len);
+
+	ASSERTeq((uintptr_t)addr % Mmap_align, 0);
+	ASSERTeq(len % Mmap_align, 0);
+
+	void *reserved_addr = VirtualAlloc(addr, len,
+				MEM_RESERVE, PAGE_NOACCESS);
+	if (reserved_addr == NULL) {
+		ERR("cannot find a contiguous region - "
+			"addr: %p, len: %lx, gle: 0x%08x",
+			addr, len, GetLastError());
+		errno = ENOMEM;
+		return MAP_FAILED;
+	}
+
+	return reserved_addr;
+}
+
+/*
+ * mmap_unreserve -- (internal) frees the range that's previously reserved
  */
 static int
-mfree_reservation(void *addr, size_t len)
+mmap_unreserve(void *addr, size_t len)
 {
+	LOG(4, "addr %p len %zu", addr, len);
+
 	ASSERTeq((uintptr_t)addr % Mmap_align, 0);
 	ASSERTeq(len % Mmap_align, 0);
 
@@ -192,6 +239,91 @@ mfree_reservation(void *addr, size_t len)
 }
 
 /*
+ * mmap_init -- (internal) load-time initialization of file mapping tracker
+ *
+ * Called automatically by the run-time loader.
+ */
+static void
+mmap_init(void)
+{
+	if (FileMappingQMutex != INVALID_HANDLE_VALUE)
+		FATAL("multiple calls to mmap_init()");
+
+	HANDLE Mutex = CreateMutex(NULL, TRUE, NULL);
+	if (Mutex == INVALID_HANDLE_VALUE)
+		FATAL("CreateMutex failed");
+
+#ifdef C_ASSERT
+	C_ASSERT(sizeof(HANDLE) == sizeof(LONG64));
+#endif
+
+	LONG64 ret = InterlockedCompareExchange64(
+			(PLONG64)&FileMappingQMutex,
+			(LONG64)Mutex, (LONG64)INVALID_HANDLE_VALUE);
+	if (ret != (LONG64)INVALID_HANDLE_VALUE) {
+		CloseHandle(Mutex);
+		FATAL("multiple calls to mmap_init()");
+	}
+
+	SYSTEM_INFO si;
+	GetSystemInfo(&si);
+	Mmap_align = si.dwAllocationGranularity;
+	Pagesize = si.dwPageSize;
+
+	SORTEDQ_INIT(&FileMappingQHead);
+
+	UnlockFileMappingQ();
+}
+
+/*
+ * mmap_fini -- (internal) file mapping tracker cleanup routine
+ *
+ * Called automatically when the process terminates.
+ */
+static void
+mmap_fini(void)
+{
+	ASSERTne(FileMappingQMutex, INVALID_HANDLE_VALUE);
+
+	/*
+	 * Let's make sure that no one is in the middle of updating the
+	 * list by grabbing the lock.
+	 */
+	HANDLE Mutex = FileMappingQMutex;
+	if (!LockFileMappingQ())
+		return; /* XXX - FATAL() */
+
+	while (!SORTEDQ_EMPTY(&FileMappingQHead)) {
+		PFILE_MAPPING_TRACKER mt;
+		mt = (PFILE_MAPPING_TRACKER)SORTEDQ_FIRST(&FileMappingQHead);
+
+		SORTEDQ_REMOVE(&FileMappingQHead, mt, ListEntry);
+
+		if (mt->BaseAddress != NULL)
+			UnmapViewOfFile(mt->BaseAddress);
+
+		size_t release_size =
+			(char *)mt->EndAddress - (char *)mt->BaseAddress;
+		void *release_addr = (char *)mt->BaseAddress + release_size;
+		mmap_unreserve(release_addr, release_size);
+
+		if (mt->FileMappingHandle != NULL)
+			CloseHandle(mt->FileMappingHandle);
+
+		if (mt->FileHandle != NULL)
+			CloseHandle(mt->FileHandle);
+
+		free(mt);
+	}
+
+	FileMappingQMutex = INVALID_HANDLE_VALUE;
+	ReleaseMutex(Mutex);
+	CloseHandle(Mutex);
+}
+
+#define PROT_ALL (PROT_READ|PROT_WRITE|PROT_EXEC)
+
+/*
  * mmap -- map file into memory
  *
  * XXX - If read-only mapping was created initially, it is not possible
@@ -203,6 +335,9 @@ mfree_reservation(void *addr, size_t len)
 void *
 mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 {
+	LOG(4, "addr %p len %zu prot %d flags %d fd %d offset %ju",
+		addr, len, prot, flags, fd, offset);
+
 	if (len == 0) {
 		ERR("invalid length: %zu", len);
 		errno = EINVAL;
@@ -267,31 +402,45 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 		}
 	}
 
+	if ((offset % Mmap_align) != 0) {
+		ERR("offset is not well-aligned: %ju", offset);
+		errno = EINVAL;
+		return MAP_FAILED;
+	}
+
 	if ((flags & MAP_FIXED) != 0) {
 		/*
-		 * free any reservations that the caller might have, also we
+		 * Free any reservations that the caller might have, also we
 		 * have to unmap any existing mappings in this region as per
 		 * mmap's manual.
 		 * XXX - Ideally we should unmap only if the prot and flags
 		 * are similar, we are deferring it as we don't rely on it
 		 * yet.
 		 */
-
-		munmap(addr, len);
+		int ret = munmap(addr, len);
+		if (ret != 0) {
+			ERR("!munmap: addr %p len %zu", addr, len);
+			return MAP_FAILED;
+		}
 	}
 
 	/* XXX - MAP_NORESERVE */
 
+	size_t len_align = roundup(len, Mmap_align);
+	size_t filelen;
+	size_t filelen_align;
 	HANDLE fh;
 	if (flags & MAP_ANON) {
 		/*
-		 * in our implementation we are choosing to ignore fd when
+		 * In our implementation we are choosing to ignore fd when
 		 * MAP_ANON is set, instead of failing.
 		 */
 		fh = INVALID_HANDLE_VALUE;
 
 		/* ignore/override offset */
 		offset = 0;
+		filelen = len;
+		filelen_align = len_align;
 	} else {
 		LARGE_INTEGER filesize;
 
@@ -300,10 +449,23 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 			errno = EBADF;
 			return MAP_FAILED;
 		}
-		fh = (HANDLE)_get_osfhandle(fd);
 
 		/*
-		 * if we are asked to map more than the file size, map till the
+		 * We need to keep file handle open for proper
+		 * implementation of msync() and to hold the file lock.
+		 */
+		if (!DuplicateHandle(GetCurrentProcess(),
+				(HANDLE)_get_osfhandle(fd),
+				GetCurrentProcess(), &fh,
+				0, FALSE, DUPLICATE_SAME_ACCESS)) {
+			ERR("cannot duplicate handle - fd: %d, gle: 0x%08x",
+					fd, GetLastError());
+			errno = ENOMEM;
+			return MAP_FAILED;
+		}
+
+		/*
+		 * If we are asked to map more than the file size, map till the
 		 * file size and reserve the following.
 		 */
 
@@ -313,34 +475,31 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 			return MAP_FAILED;
 		}
 
-		if (offset > (off_t)filesize.QuadPart) {
+		if (offset >= (off_t)filesize.QuadPart) {
 			errno = EINVAL;
 			ERR("offset is beyond the file size");
 			return MAP_FAILED;
 		}
 
+		/* calculate length of the mapped portion of the file */
+		filelen = filesize.QuadPart - offset;
+		if (filelen > len)
+			filelen = len;
+		filelen_align = roundup(filelen, Mmap_align);
+
 		if ((offset + len) > (size_t)filesize.QuadPart) {
 			/*
-			 * reserve virtual address for the rest of range we need
+			 * Reserve virtual address for the rest of range we need
 			 * to map, and free a portion in the beginning for this
-			 * allocation
+			 * allocation.
 			 */
-			void *reserved_addr = VirtualAlloc(addr, len,
-						MEM_RESERVE, PAGE_NOACCESS);
-			if (reserved_addr == NULL) {
-				ERR("cannot find a contiguous region - "
-					"addr: %p, len: %lx, gle: 0x%08x",
-					addr, len, GetLastError());
-				errno = ENOMEM;
-				return MAP_FAILED;
-			}
-
+			void *reserved_addr = mmap_reserve(addr, len_align);
 			if (addr != NULL && addr != reserved_addr &&
-				(flags & MAP_FIXED) != 0) {
+					(flags & MAP_FIXED) != 0) {
 				ERR("cannot find a contiguous region - "
 					"addr: %p, len: %lx, gle: 0x%08x",
 					addr, len, GetLastError());
-				if (mfree_reservation(reserved_addr, 0) != 0) {
+				if (mmap_unreserve(reserved_addr, 0) != 0) {
 					ASSERT(FALSE);
 					ERR("cannot free reserved region");
 				}
@@ -349,8 +508,7 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 			}
 
 			addr = reserved_addr;
-			len = (size_t)filesize.QuadPart - offset;
-			if (mfree_reservation(reserved_addr, len) != 0) {
+			if (mmap_unreserve(reserved_addr, filelen_align) != 0) {
 				ASSERT(FALSE);
 				ERR("cannot free reserved region");
 				return MAP_FAILED;
@@ -358,14 +516,14 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 		}
 	}
 
-	HANDLE fileMapping = CreateFileMapping(fh,
-					NULL, /* security attributes */
-					protect,
-					(DWORD) ((len + offset) >> 32),
-					(DWORD) ((len + offset) & 0xFFFFFFFF),
-					NULL);
+	HANDLE fmh = CreateFileMapping(fh,
+			NULL, /* security attributes */
+			protect,
+			(DWORD) ((filelen + offset) >> 32),
+			(DWORD) ((filelen + offset) & 0xFFFFFFFF),
+			NULL);
 
-	if (fileMapping == NULL) {
+	if (fmh == NULL) {
 		DWORD gle = GetLastError();
 		ERR("CreateFileMapping, gle: 0x%08x", gle);
 		if (gle == ERROR_ACCESS_DENIED)
@@ -375,33 +533,33 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 		return MAP_FAILED;
 	}
 
-	void *base = MapViewOfFileEx(fileMapping,
-				access,
-				(DWORD) (offset >> 32),
-				(DWORD) (offset & 0xFFFFFFFF),
-				len,
-				addr); /* hint address */
+	void *base = MapViewOfFileEx(fmh,
+			access,
+			(DWORD) (offset >> 32),
+			(DWORD) (offset & 0xFFFFFFFF),
+			filelen,
+			addr); /* hint address */
 
 	if (base == NULL) {
 		if (addr == NULL || (flags & MAP_FIXED) != 0) {
 			ERR("MapViewOfFileEx, gle: 0x%08x", GetLastError());
 			errno = EINVAL;
-			CloseHandle(fileMapping);
+			CloseHandle(fmh);
 			return MAP_FAILED;
 		}
 
 		/* try again w/o hint */
-		base = MapViewOfFileEx(fileMapping,
+		base = MapViewOfFileEx(fmh,
 				access,
 				(DWORD) (offset >> 32),
 				(DWORD) (offset & 0xFFFFFFFF),
-				len,
+				filelen,
 				NULL); /* no hint address */
 	}
 
 	if (base == NULL) {
 		ERR("MapViewOfFileEx, gle: 0x%08x", GetLastError());
-		CloseHandle(fileMapping);
+		CloseHandle(fmh);
 		return MAP_FAILED;
 	}
 
@@ -416,38 +574,97 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
 
 	if (mt == NULL) {
 		ERR("!malloc");
-		CloseHandle(fileMapping);
+		CloseHandle(fmh);
 		return MAP_FAILED;
 	}
 
+	mt->Flags = 0;
 	mt->FileHandle = fh;
-	mt->FileMappingHandle = fileMapping;
+	mt->FileMappingHandle = fmh;
 	mt->BaseAddress = base;
-	mt->EndAddress = (PVOID *)((char *)base + roundup(len, Mmap_align));
+	mt->EndAddress = (void *)((char *)base + len_align);
 	mt->Access = access;
 	mt->Offset = offset;
+	mt->FileLen = filelen_align;
 
-	WaitForSingleObject(FileMappingListMutex, INFINITE);
-	LIST_INSERT_HEAD(&FileMappingListHead, mt, ListEntry);
-	ReleaseMutex(FileMappingListMutex);
+	/*
+	 * XXX: Use the QueryVirtualMemoryInformation when available in the new
+	 * SDK.  If the file is DAX mapped say so in the FILE_MAPPING_TRACKER
+	 * Flags.
+	 */
+	DWORD filesystemFlags;
+	if (fh == INVALID_HANDLE_VALUE) {
+		LOG(4, "anonymous mapping - not DAX mapped - handle: %p", fh);
+	} else if (GetVolumeInformationByHandleW(fh, NULL, 0, NULL, NULL,
+				&filesystemFlags, NULL, 0)) {
+		if (filesystemFlags & FILE_DAX_VOLUME) {
+			mt->Flags |= FILE_MAPPING_TRACKER_FLAG_DIRECT_MAPPED;
+		} else {
+			LOG(4, "file is not DAX mapped - handle: %p", fh);
+		}
+	} else {
+		ERR("failed to query volume information : %08x",
+			GetLastError());
+	}
+
+	if (!LockFileMappingQ()) {
+		ERR("cannot lock mapping list");
+		errno = EBUSY;
+		return MAP_FAILED; /* XXX - clean up */
+	}
+
+	SORTEDQ_INSERT(&FileMappingQHead, mt, ListEntry,
+			FILE_MAPPING_TRACKER, mmap_file_mapping_comparer);
+
+	UnlockFileMappingQ();
+
+#ifdef MMAP_DEBUG_INFO
+	mmap_info();
+#endif
 
 	return base;
 }
 
 /*
  * mmap_split -- (internal) replace existing mapping with another one(s)
+ *
+ * Unmaps the region between [begin,end].  If it's in a middle of the existing
+ * mapping, it results in two new mappings and duplicated file/mapping handles.
  */
 static int
-mmap_split(PFILE_MAPPING_TRACKER mt, PVOID *begin, PVOID *end)
+mmap_split(PFILE_MAPPING_TRACKER mt, void *begin, void *end)
 {
+	LOG(4, "begin %p end %p", begin, end);
+
 	ASSERTeq((uintptr_t)begin % Mmap_align, 0);
 	ASSERTeq((uintptr_t)end % Mmap_align, 0);
 
 	PFILE_MAPPING_TRACKER mtb = NULL;
 	PFILE_MAPPING_TRACKER mte = NULL;
+	HANDLE fh = mt->FileHandle;
 	HANDLE fmh = mt->FileMappingHandle;
 
+	/*
+	 * In this routine we copy flags from mt to the two subsets that we
+	 * create.  All flags may not be appropriate to propagate so let's
+	 * assert about the flags we know, if some one adds a new flag in the
+	 * future they would know about this copy and take appropricate action.
+	 */
+	C_ASSERT(FILE_MAPPING_TRACKER_FLAGS_MASK == 1);
+
+	/*
+	 * 1)    b    e           b     e
+	 *    xxxxxxxxxxxxx => xxx.......xxxx  -  mtb+mte
+	 * 2)       b     e           b     e
+	 *    xxxxxxxxxxxxx => xxxxxxx.......  -  mtb
+	 * 3) b     e          b      e
+	 *    xxxxxxxxxxxxx => ........xxxxxx  -  mte
+	 * 4) b           e    b            e
+	 *    xxxxxxxxxxxxx => ..............  -  <none>
+	 */
+
 	if (begin > mt->BaseAddress) {
+		/* case #1/2 */
 		/* new mapping at the beginning */
 		mtb = malloc(sizeof(struct FILE_MAPPING_TRACKER));
 		if (mtb == NULL) {
@@ -455,15 +672,20 @@ mmap_split(PFILE_MAPPING_TRACKER mt, PVOID *begin, PVOID *end)
 			goto err;
 		}
 
-		mtb->FileHandle = mt->FileHandle;
+		mtb->Flags = mt->Flags;
+		mtb->FileHandle = fh;
 		mtb->FileMappingHandle = fmh;
 		mtb->BaseAddress = mt->BaseAddress;
 		mtb->EndAddress = begin;
 		mtb->Access = mt->Access;
 		mtb->Offset = mt->Offset;
+
+		size_t len = (char *)begin - (char *)mt->BaseAddress;
+		mtb->FileLen = len >= mt->FileLen ? mt->FileLen : len;
 	}
 
 	if (end < mt->EndAddress) {
+		/* case #1/3 */
 		/* new mapping at the end */
 		mte = malloc(sizeof(struct FILE_MAPPING_TRACKER));
 		if (mte == NULL) {
@@ -471,75 +693,162 @@ mmap_split(PFILE_MAPPING_TRACKER mt, PVOID *begin, PVOID *end)
 			goto err;
 		}
 
-		mte->FileHandle = mt->FileHandle;
-		if (!mtb)
+		if (!mtb) {
+			/* case #3 */
+			mte->FileHandle = fh;
 			mte->FileMappingHandle = fmh;
-		else if (!DuplicateHandle(GetCurrentProcess(), fmh,
-				GetCurrentProcess(), &mte->FileMappingHandle,
-				0, FALSE, DUPLICATE_SAME_ACCESS)) {
-			ERR("DuplicateHandle, gle: 0x%08x", GetLastError());
-			goto err;
+		} else {
+			/* case #1 - need to duplicate handles */
+			mte->FileHandle = NULL;
+			mte->FileMappingHandle = NULL;
+
+			if (!DuplicateHandle(GetCurrentProcess(), fh,
+					GetCurrentProcess(),
+					&mte->FileHandle,
+					0, FALSE, DUPLICATE_SAME_ACCESS)) {
+				ERR("DuplicateHandle, gle: 0x%08x",
+					GetLastError());
+				goto err;
+			}
+
+			if (!DuplicateHandle(GetCurrentProcess(), fmh,
+					GetCurrentProcess(),
+					&mte->FileMappingHandle,
+					0, FALSE, DUPLICATE_SAME_ACCESS)) {
+				ERR("DuplicateHandle, gle: 0x%08x",
+					GetLastError());
+				goto err;
+			}
 		}
+
+		mte->Flags = mt->Flags;
 		mte->BaseAddress = end;
 		mte->EndAddress = mt->EndAddress;
 		mte->Access = mt->Access;
 		mte->Offset = mt->Offset +
 			((char *)mte->BaseAddress - (char *)mt->BaseAddress);
+
+		size_t len = (char *)end - (char *)mt->BaseAddress;
+		mte->FileLen = len >= mt->FileLen ? 0 : mt->FileLen - len;
 	}
 
-	if (UnmapViewOfFile(mt->BaseAddress) == FALSE) {
+	if (mt->FileLen > 0 && UnmapViewOfFile(mt->BaseAddress) == FALSE) {
 		ERR("UnmapViewOfFile, gle: 0x%08x", GetLastError());
 		goto err;
 	}
 
-	if (!mtb && !mte)
-		CloseHandle(fmh);
+	size_t len = (char *)mt->EndAddress - (char *)mt->BaseAddress;
+	if (len > mt->FileLen) {
+		void *addr = (char *)mt->BaseAddress + mt->FileLen;
+		mmap_unreserve(addr, len - mt->FileLen);
+	}
 
-	LIST_REMOVE(mt, ListEntry);
+	if (!mtb && !mte) {
+		/* case #4 */
+		CloseHandle(fmh);
+		CloseHandle(fh);
+	}
+
+	/*
+	 * free entry for the original mapping
+	 */
+	SORTEDQ_REMOVE(&FileMappingQHead, mt, ListEntry);
 	free(mt);
 
 	if (mtb) {
-		void *base = MapViewOfFileEx(mtb->FileMappingHandle,
-			mtb->Access,
-			(DWORD) (mtb->Offset >> 32),
-			(DWORD) (mtb->Offset & 0xFFFFFFFF),
-			(char *)mtb->EndAddress - (char *)mtb->BaseAddress,
-			mtb->BaseAddress); /* hint address */
-
-		if (base == NULL) {
-			ERR("MapViewOfFileEx, gle: 0x%08x", GetLastError());
-			goto err_close;
+		size_t len = (char *)mtb->EndAddress - (char *)mtb->BaseAddress;
+		if (len > mtb->FileLen) {
+			void *addr = (char *)mtb->BaseAddress + mtb->FileLen;
+			void *raddr = mmap_reserve(addr, len - mtb->FileLen);
+			if (raddr == MAP_FAILED) {
+				ERR("cannot find a contiguous region - "
+					"addr: %p, len: %lx, gle: 0x%08x",
+					addr, len, GetLastError());
+				goto err;
+			}
 		}
 
-		LIST_INSERT_HEAD(&FileMappingListHead, mtb, ListEntry);
+		if (mtb->FileLen > 0) {
+			void *base = MapViewOfFileEx(mtb->FileMappingHandle,
+				mtb->Access,
+				(DWORD) (mtb->Offset >> 32),
+				(DWORD) (mtb->Offset & 0xFFFFFFFF),
+				mtb->FileLen,
+				mtb->BaseAddress); /* hint address */
+
+			if (base == NULL) {
+				ERR("MapViewOfFileEx, gle: 0x%08x",
+						GetLastError());
+				goto err;
+			}
+		}
+
+		SORTEDQ_INSERT(&FileMappingQHead, mtb, ListEntry,
+			FILE_MAPPING_TRACKER, mmap_file_mapping_comparer);
 	}
 
 	if (mte) {
-		void *base = MapViewOfFileEx(mte->FileMappingHandle,
-			mte->Access,
-			(DWORD) (mte->Offset >> 32),
-			(DWORD) (mte->Offset & 0xFFFFFFFF),
-			(char *)mte->EndAddress - (char *)mte->BaseAddress,
-			mte->BaseAddress); /* hint address */
-
-		if (base == NULL) {
-			ERR("MapViewOfFileEx, gle: 0x%08x", GetLastError());
-			goto err_close;
+		size_t len = (char *)mte->EndAddress - (char *)mte->BaseAddress;
+		if (len > mte->FileLen) {
+			void *addr = (char *)mte->BaseAddress + mte->FileLen;
+			void *raddr = mmap_reserve(addr, len - mte->FileLen);
+			if (raddr == MAP_FAILED) {
+				ERR("cannot find a contiguous region - "
+					"addr: %p, len: %lx, gle: 0x%08x",
+					addr, len, GetLastError());
+				goto err;
+			}
 		}
 
-		LIST_INSERT_HEAD(&FileMappingListHead, mte, ListEntry);
+		if (mte->FileLen > 0) {
+			void *base = MapViewOfFileEx(mte->FileMappingHandle,
+				mte->Access,
+				(DWORD) (mte->Offset >> 32),
+				(DWORD) (mte->Offset & 0xFFFFFFFF),
+				mte->FileLen,
+				mte->BaseAddress); /* hint address */
+
+			if (base == NULL) {
+				ERR("MapViewOfFileEx, gle: 0x%08x",
+						GetLastError());
+				goto err_mte;
+			}
+		}
+
+		SORTEDQ_INSERT(&FileMappingQHead, mte, ListEntry,
+			FILE_MAPPING_TRACKER, mmap_file_mapping_comparer);
 	}
 
 	return 0;
 
-err_close:
-	/*
-	 * Since the original mapping is already deleted, there's not much
-	 * we can do...
-	 */
-	CloseHandle(fmh);
-
 err:
+	if (mtb) {
+		ASSERTeq(mtb->FileMappingHandle, fmh);
+		ASSERTeq(mtb->FileHandle, fh);
+		CloseHandle(mtb->FileMappingHandle);
+		CloseHandle(mtb->FileHandle);
+
+		size_t len = (char *)mtb->EndAddress - (char *)mtb->BaseAddress;
+		if (len > mtb->FileLen) {
+			void *addr = (char *)mtb->BaseAddress + mtb->FileLen;
+			mmap_unreserve(addr, len - mtb->FileLen);
+		}
+	}
+
+err_mte:
+	if (mte) {
+		if (mte->FileMappingHandle)
+			CloseHandle(mte->FileMappingHandle);
+		if (mte->FileHandle)
+			CloseHandle(mte->FileHandle);
+
+		size_t len = (char *)mte->EndAddress - (char *)mte->BaseAddress;
+		if (len > mte->FileLen) {
+			void *addr = (char *)mte->BaseAddress + mte->FileLen;
+			mmap_unreserve(addr, len - mte->FileLen);
+		}
+	}
+
 	free(mtb);
 	free(mte);
 	return -1;
@@ -551,6 +860,8 @@ err:
 int
 munmap(void *addr, size_t len)
 {
+	LOG(4, "addr %p len %zu", addr, len);
+
 	if (((uintptr_t)addr % Mmap_align) != 0) {
 		ERR("address is not well-aligned: %p", addr);
 		errno = EINVAL;
@@ -570,29 +881,43 @@ munmap(void *addr, size_t len)
 		len = UINTPTR_MAX - (uintptr_t)addr;
 	}
 
-	PVOID *begin = addr;
-	PVOID *end = (PVOID *)((char *)addr + len);
+	void *begin = addr;
+	void *end = (void *)((char *)addr + len);
 
-	WaitForSingleObject(FileMappingListMutex, INFINITE);
+	if (!LockFileMappingQ()) {
+		ERR("cannot lock mapping list");
+		errno = EBUSY;
+		return -1;
+	}
 
-	PFILE_MAPPING_TRACKER next;
 	PFILE_MAPPING_TRACKER mt;
-	mt = (PFILE_MAPPING_TRACKER)LIST_FIRST(&FileMappingListHead);
-	while (len > 0 && mt != NULL) {
-		if (begin >= mt->EndAddress || end <= mt->BaseAddress) {
-			/* range not in the mapping */
-			mt = (PFILE_MAPPING_TRACKER)LIST_NEXT(mt, ListEntry);
+	PFILE_MAPPING_TRACKER next;
+	for (mt = SORTEDQ_FIRST(&FileMappingQHead);
+		mt != (void *)&FileMappingQHead;
+		mt = next) {
+
+		/*
+		 * Pick the next entry before we split there by delete the
+		 * this one (NOTE: mmap_spilt could delete this entry).
+		 */
+		next = SORTEDQ_NEXT(mt, ListEntry);
+
+		if (mt->BaseAddress >= end) {
+			LOG(4, "ignoring all mapped ranges beyond given range");
+			break;
+		}
+
+		if (mt->EndAddress <= begin) {
+			LOG(4, "skipping a mapped range before given range");
 			continue;
 		}
 
-		PVOID *begin2 = begin > mt->BaseAddress ?
+		void *begin2 = begin > mt->BaseAddress ?
 				begin : mt->BaseAddress;
-		PVOID *end2 = end < mt->EndAddress ?
+		void *end2 = end < mt->EndAddress ?
 				end : mt->EndAddress;
 
 		size_t len2 = (char *)end2 - (char *)begin2;
-
-		next = (PFILE_MAPPING_TRACKER)LIST_NEXT(mt, ListEntry);
 
 		void *align_end = (void *)roundup((uintptr_t)end2, Mmap_align);
 		if (mmap_split(mt, begin2, align_end) != 0) {
@@ -600,27 +925,35 @@ munmap(void *addr, size_t len)
 			goto err;
 		}
 
-		len -= len2;
-		mt = next;
+		if (len > len2) {
+			len -= len2;
+		} else {
+			len = 0;
+			break;
+		}
 	}
 
 	/*
-	 * if we didn't find any mapped regions in our list attempt to free
-	 * if the entire range is reserved.
+	 * If we didn't find any mapped regions in our list attempt to free
+	 * as if the entire range is reserved.
 	 *
-	 * XXX: we don't handle a range having few mapped regions and few
-	 * reserved regions
+	 * XXX: We don't handle a range having few mapped regions and few
+	 * reserved regions.
 	 */
 	if (len > 0)
-		mfree_reservation(addr, roundup(len, Mmap_align));
+		mmap_unreserve(addr, roundup(len, Mmap_align));
 
 	retval = 0;
 
 err:
-	ReleaseMutex(FileMappingListMutex);
+	UnlockFileMappingQ();
 
 	if (retval == -1)
 		errno = EINVAL;
+
+#ifdef MMAP_DEBUG_INFO
+	mmap_info();
+#endif
 
 	return retval;
 }
@@ -633,6 +966,8 @@ err:
 int
 msync(void *addr, size_t len, int flags)
 {
+	LOG(4, "addr %p len %zu flags %d", addr, len, flags);
+
 	if ((flags & ~MS_ALL) != 0) {
 		ERR("invalid flags: 0x%08x", flags);
 		errno = EINVAL;
@@ -669,39 +1004,56 @@ msync(void *addr, size_t len, int flags)
 
 	int retval = -1;
 
-	PVOID *begin = addr;
-	PVOID *end = (PVOID *)((char *)addr + len);
+	void *begin = addr;
+	void *end = (void *)((char *)addr + len);
 
-	WaitForSingleObject(FileMappingListMutex, INFINITE);
+	if (!LockFileMappingQ()) {
+		ERR("cannot lock mapping list");
+		errno = EBUSY;
+		return -1;
+	}
 
 	PFILE_MAPPING_TRACKER mt;
-	mt = (PFILE_MAPPING_TRACKER)LIST_FIRST(&FileMappingListHead);
-	while (len > 0 && mt != NULL) {
-		if (begin >= mt->EndAddress || end <= mt->BaseAddress) {
-			/* range not in the mapping */
-			mt = (PFILE_MAPPING_TRACKER)LIST_NEXT(mt, ListEntry);
+	SORTEDQ_FOREACH(mt, &FileMappingQHead, ListEntry) {
+		if (mt->BaseAddress >= end) {
+			LOG(4, "ignoring all mapped ranges beyond given range");
+			break;
+		}
+		if (mt->EndAddress <= begin) {
+			LOG(4, "skipping a mapped range before given range");
 			continue;
 		}
 
-		PVOID *begin2 = begin > mt->BaseAddress ?
+		void *begin2 = begin > mt->BaseAddress ?
 			begin : mt->BaseAddress;
-		PVOID *end2 = end < mt->EndAddress ?
+		void *end2 = end < mt->EndAddress ?
 			end : mt->EndAddress;
 
 		size_t len2 = (char *)end2 - (char *)begin2;
 
-		if (FlushViewOfFile(begin2, len2) == FALSE) {
-			ERR("FlushViewOfFile, gle: 0x%08x", GetLastError());
-			goto err;
+		/* do nothing for anonymous mappings */
+		if (mt->FileHandle != INVALID_HANDLE_VALUE) {
+			if (FlushViewOfFile(begin2, len2) == FALSE) {
+				ERR("FlushViewOfFile, gle: 0x%08x",
+					GetLastError());
+				errno = ENOMEM;
+				goto err;
+			}
+
+			if (FlushFileBuffers(mt->FileHandle) == FALSE) {
+				ERR("FlushFileBuffers, gle: 0x%08x",
+					GetLastError());
+				errno = EINVAL;
+				goto err;
+			}
 		}
 
-		if (FlushFileBuffers(mt->FileHandle) == FALSE) {
-			ERR("FlushFileBuffers, gle: 0x%08x", GetLastError());
-			goto err;
+		if (len > len2) {
+			len -= len2;
+		} else {
+			len = 0;
+			break;
 		}
-
-		len -= len2;
-		mt = (PFILE_MAPPING_TRACKER)LIST_NEXT(mt, ListEntry);
 	}
 
 	if (len > 0) {
@@ -712,7 +1064,7 @@ msync(void *addr, size_t len, int flags)
 	}
 
 err:
-	ReleaseMutex(FileMappingListMutex);
+	UnlockFileMappingQ();
 	return retval;
 }
 
@@ -730,6 +1082,7 @@ err:
 int
 mprotect(void *addr, size_t len, int prot)
 {
+	LOG(4, "addr %p len %zu prot %d", addr, len, prot);
 
 	if (((uintptr_t)addr % Pagesize) != 0) {
 		ERR("address is not page-aligned: %p", addr);
@@ -763,24 +1116,45 @@ mprotect(void *addr, size_t len, int prot)
 
 	int retval = -1;
 
-	PVOID *begin = addr;
-	PVOID *end = (PVOID *)((char *)addr + len);
+	void *begin = addr;
+	void *end = (void *)((char *)addr + len);
 
-	WaitForSingleObject(FileMappingListMutex, INFINITE);
+	if (!LockFileMappingQ()) {
+		ERR("cannot lock mapping list");
+		errno = EBUSY;
+		return -1;
+	}
 
 	PFILE_MAPPING_TRACKER mt;
-	mt = (PFILE_MAPPING_TRACKER)LIST_FIRST(&FileMappingListHead);
-	while (len > 0 && mt != NULL) {
-		if (begin >= mt->EndAddress || end <= mt->BaseAddress) {
-			/* range not in the mapping */
-			mt = (PFILE_MAPPING_TRACKER)LIST_NEXT(mt, ListEntry);
+	SORTEDQ_FOREACH(mt, &FileMappingQHead, ListEntry) {
+		if (mt->BaseAddress >= end) {
+			LOG(4, "ignoring all mapped ranges beyond given range");
+			break;
+		}
+		if (mt->EndAddress <= begin) {
+			LOG(4, "skipping a mapped range before given range");
 			continue;
 		}
 
-		PVOID *begin2 = begin > mt->BaseAddress ?
+		void *begin2 = begin > mt->BaseAddress ?
 				begin : mt->BaseAddress;
-		PVOID *end2 = end < mt->EndAddress ?
+		void *end2 = end < mt->EndAddress ?
 				end : mt->EndAddress;
+
+		/*
+		 * protect of region to VirtualProtection must be compatible
+		 * with the access protection specified for this region
+		 * when the view was mapped using MapViewOfFileEx
+		 */
+		if (mt->Access == FILE_MAP_COPY) {
+			if (protect & PAGE_READWRITE) {
+				protect &= ~PAGE_READWRITE;
+				protect |= PAGE_WRITECOPY;
+			} else if (protect & PAGE_EXECUTE_READWRITE) {
+				protect &= ~PAGE_EXECUTE_READWRITE;
+				protect |= PAGE_EXECUTE_WRITECOPY;
+			}
+		}
 
 		size_t len2 = (char *)end2 - (char *)begin2;
 
@@ -805,8 +1179,12 @@ mprotect(void *addr, size_t len, int prot)
 			goto err;
 		}
 
-		len -= len2;
-		mt = (PFILE_MAPPING_TRACKER)LIST_NEXT(mt, ListEntry);
+		if (len > len2) {
+			len -= len2;
+		} else {
+			len = 0;
+			break;
+		}
 	}
 
 	if (len > 0) {
@@ -817,7 +1195,7 @@ mprotect(void *addr, size_t len, int prot)
 	}
 
 err:
-	ReleaseMutex(FileMappingListMutex);
+	UnlockFileMappingQ();
 	return retval;
 }
 

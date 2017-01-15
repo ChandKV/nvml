@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -43,12 +43,16 @@
 #ifndef LIBPMEMLOG_H
 #define LIBPMEMLOG_H 1
 
+#ifdef _WIN32
+#include <pmemcompat.h>
+#else
+#include <sys/uio.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 #include <sys/types.h>
-#include <sys/uio.h>
 
 /*
  * opaque type, internal to libpmemlog

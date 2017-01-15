@@ -40,10 +40,11 @@ export UNITTEST_NUM=4
 # standard unit test setup
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type none
 require_build_type debug nondebug
 require_valgrind_dev_3_10
-require_valgrind_helgrind
 configure_valgrind helgrind force-enable
 setup
 

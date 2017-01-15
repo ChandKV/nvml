@@ -55,6 +55,7 @@ TOOLS=../tools
 [ "$PMEMOBJCLI" ] || PMEMOBJCLI=$TOOLS/pmemobjcli/pmemobjcli
 [ "$PMEMDETECT" ] || PMEMDETECT=$TOOLS/pmemdetect/pmemdetect.static-nondebug
 [ "$FIP" ] || FIP=$TOOLS/fip/fip
+[ "$DDMAP" ] || DDMAP=$TOOLS/ddmap/ddmap
 
 # force globs to fail if they don't match
 shopt -s failglob
@@ -209,6 +210,8 @@ export PMEMLOG_LOG_LEVEL=3
 export PMEMLOG_LOG_FILE=pmemlog$UNITTEST_NUM.log
 export PMEMOBJ_LOG_LEVEL=3
 export PMEMOBJ_LOG_FILE=pmemobj$UNITTEST_NUM.log
+export PMEMPOOL_LOG_LEVEL=3
+export PMEMPOOL_LOG_FILE=pmempool$UNITTEST_NUM.log
 
 export VMMALLOC_POOL_DIR="$DIR"
 export VMMALLOC_POOL_SIZE=$((16 * 1024 * 1024))
@@ -220,7 +223,7 @@ export VALIDATE_VALGRIND_LOG=1
 
 export RPMEM_LOG_LEVEL=3
 export RPMEM_LOG_FILE=rpmem$UNITTEST_NUM.log
-export RPMEMD_LOG_LEVEL=err
+export RPMEMD_LOG_LEVEL=info
 export RPMEMD_LOG_FILE=rpmemd$UNITTEST_NUM.log
 
 export REMOTE_VARS="
@@ -392,7 +395,7 @@ function create_holey_file() {
 #   psize:ppath[:cmd[:fsize[:mode]]]
 #
 # where:
-#   psize - part size
+#   psize - part size or AUTO (only for DAX device)
 #   ppath - path
 #   cmd   - (optional) can be:
 #            x - do nothing (may be skipped if there's no 'fsize', 'mode')
@@ -411,10 +414,11 @@ function create_holey_file() {
 #
 # example:
 #   The following command define a pool set consisting of two parts: 16MB
-#   and 32MB, and the replica with only one part of 48MB.  The first part file
-#   is not created, the second is zeroed.  The only replica part is non-zeroed.
-#   Also, the last file is read-only and its size does not match the information
-#   from pool set file. The last line describes a remote replica.
+#   and 32MB, a local replica with only one part of 48MB and a remote replica.
+#   The first part file is not created, the second is zeroed.  The only replica
+#   part is non-zeroed. Also, the last file is read-only and its size
+#   does not match the information from pool set file. The last line describes
+#   a remote replica.
 #
 #	create_poolset ./pool.set 16M:testfile1 32M:testfile2:z \
 #				R 48M:testfile3:n:11M:0400 \
@@ -453,16 +457,18 @@ function create_poolset() {
 		shift 1
 
 		fsize=${fparms[0]}
-		fpath=`readlink -mn ${fparms[1]}`
+		fpath=${fparms[1]}
 		cmd=${fparms[2]}
-		asize=${fparams[3]}
-		mode=${fparms[4]]}
+		asize=${fparms[3]}
+		mode=${fparms[4]}
 
 		if [ ! $asize ]; then
 			asize=$fsize
 		fi
 
-		asize=$(convert_to_bytes $asize)
+		if [ "$asize" != "AUTO" ]; then
+			asize=$(convert_to_bytes $asize)
+		fi
 
 		case "$cmd"
 		in
@@ -522,25 +528,68 @@ function ignore_debug_info_errors() {
 }
 
 #
+# get_trace -- return tracing tool command line if applicable
+#	usage: get_trace <check type> <log file> [<node>]
+#
+function get_trace() {
+	if [ "$1" == "none" ]; then
+		echo "$TRACE"
+		return
+	fi
+	local exe=$VALGRINDEXE
+	local check_type=$1
+	local log_file=$2
+	local opts="$VALGRIND_OPTS"
+	local node=-1
+	[ "$#" -eq 3 ] && node=$3
+
+	if [ "$check_type" = "memcheck" -a "$MEMCHECK_DONT_CHECK_LEAKS" != "1" ]; then
+		opts="$opts --leak-check=full"
+	fi
+	opts="$opts --suppressions=../ld.supp --suppressions=../memcheck-libunwind.supp"
+	if [ "$node" -ne -1 ]; then
+		exe=${NODE_VALGRINDEXE[$node]}
+		opts="$opts"
+	fi
+
+	echo "$exe --tool=$check_type --log-file=$log_file $opts $TRACE"
+	return
+}
+
+#
+# validate_valgrind_log -- validate valgrind log
+#	usage: validate_valgrind_log <log-file>
+#
+function validate_valgrind_log() {
+	[ "$VALIDATE_VALGRIND_LOG" != "1" ] && return
+	if [ ! -e "$1.match" ] && grep "ERROR SUMMARY: [^0]" $1 >/dev/null; then
+		msg="failed"
+		[ -t 2 ] && command -v tput >/dev/null && msg="$(tput setaf 1)$msg$(tput sgr0)"
+		echo -e "$UNITTEST_NAME $msg with Valgrind. See $1. First 20 lines below." >&2
+		paste -d " " <(yes $UNITTEST_NAME $1 | head -n 20) <(tail -n 20 $1) >&2
+		false
+	fi
+}
+
+#
 # expect_normal_exit -- run a given command, expect it to exit 0
 #
 function expect_normal_exit() {
-	if [ "$CHECK_TYPE" != "none" ]; then
-		OLDTRACE="$TRACE"
-		VALGRIND_LOG_FILE=${CHECK_TYPE}${UNITTEST_NUM}.log
-		rm -f $VALGRIND_LOG_FILE
-		if [ "$CHECK_TYPE" = "memcheck" -a "$MEMCHECK_DONT_CHECK_LEAKS" != "1" ]; then
-			export OLD_VALGRIND_OPTS="$VALGRIND_OPTS"
-			export VALGRIND_OPTS="$VALGRIND_OPTS --leak-check=full"
+	local VALGRIND_LOG_FILE=${CHECK_TYPE}${UNITTEST_NUM}.log
+	local N=$2
+
+	# in case of a remote execution disable valgrind check if valgrind is not
+	# enabled on node
+	local _CHECK_TYPE=$CHECK_TYPE
+	if [ "$1" == "run_on_node" -o "$1" == "run_on_node_background" ]; then
+		if [ -z $(is_valgrind_enabled_on_node $N) ]; then
+			_CHECK_TYPE="none"
 		fi
-		export VALGRIND_OPTS="$VALGRIND_OPTS --suppressions=../ld.supp"
-		if [ "$1" == "run_on_node" -o "$1" == "run_on_node_background" ]; then
-			local _VALGRINDEXE=${NODE_VALGRINDEXE[$2]}
-		else
-			local _VALGRINDEXE=$VALGRINDEXE
-		fi
-		TRACE="$_VALGRINDEXE --tool=$CHECK_TYPE --log-file=$VALGRIND_LOG_FILE $VALGRIND_OPTS $TRACE"
+	else
+		N=-1
 	fi
+
+	local trace=$(get_trace $_CHECK_TYPE $VALGRIND_LOG_FILE $N)
 
 	if [ "$MEMCHECK_DONT_CHECK_LEAKS" = "1" -a "$CHECK_TYPE" = "memcheck" ]; then
 		export OLD_ASAN_OPTIONS="${ASAN_OPTIONS}"
@@ -549,21 +598,20 @@ function expect_normal_exit() {
 
 	local REMOTE_VALGRIND_LOG=0
 	if [ "$CHECK_TYPE" != "none" ]; then
-		local N=$2
 	        case "$1"
 	        in
 	        run_on_node)
 			REMOTE_VALGRIND_LOG=1
-			TRACE="$1 $2 $TRACE"
+			trace="$1 $2 $trace"
 			[ $# -ge 2  ] && shift 2 || shift $#
 	                ;;
 	        run_on_node_background)
-			TRACE="$1 $2 $3 $TRACE"
+			trace="$1 $2 $3 $trace"
 			[ $# -ge 3  ] && shift 3 || shift $#
 	                ;;
 	        wait_on_node|wait_on_node_port|kill_on_node)
 			[ "$1" = "wait_on_node" ] && REMOTE_VALGRIND_LOG=1
-			TRACE="$1 $2 $3 $4"
+			trace="$1 $2 $3 $4"
 			[ $# -ge 4  ] && shift 4 || shift $#
 	                ;;
 	        esac
@@ -571,16 +619,15 @@ function expect_normal_exit() {
 
 	set +e
 	eval $ECHO LD_LIBRARY_PATH=$TEST_LD_LIBRARY_PATH LD_PRELOAD=$TEST_LD_PRELOAD \
-	$TRACE $*
+		$trace $*
 	ret=$?
 	if [ $REMOTE_VALGRIND_LOG -eq 1 ]; then
-		validate_node_number $N
-		local REMOTE_DIR=${NODE_WORKING_DIR[$N]}/$curtestdir
-		local NEW_VALGRIND_LOG_FILE=node\_$N\_$VALGRIND_LOG_FILE
-		run_command scp $SCP_OPTS \
-			${NODE[$N]}:$REMOTE_DIR/$VALGRIND_LOG_FILE \
-			$NEW_VALGRIND_LOG_FILE 2>/dev/null
-		VALGRIND_LOG_FILE=$NEW_VALGRIND_LOG_FILE
+		for node in $CHECK_NODES
+		do
+			local new_log_file=node\_$node\_$VALGRIND_LOG_FILE
+			copy_files_from_node $node "." $VALGRIND_LOG_FILE
+			mv $VALGRIND_LOG_FILE $new_log_file
+		done
 	fi
 	set -e
 
@@ -603,14 +650,12 @@ function expect_normal_exit() {
 			echo -e "$UNITTEST_NAME $msg." >&2
 		fi
 		if [ "$CHECK_TYPE" != "none" -a -f $VALGRIND_LOG_FILE ]; then
-			echo "$VALGRIND_LOG_FILE below." >&2
-			ln=`wc -l < $VALGRIND_LOG_FILE`
-			paste -d " " <(yes $UNITTEST_NAME $VALGRIND_LOG_FILE | head -n $ln) <(head -n $ln $VALGRIND_LOG_FILE) >&2
+			dump_last_n_lines $VALGRIND_LOG_FILE
 		fi
 
 		# ignore Ctrl-C
 		if [ $ret != 130 ]; then
-			for f in $(get_files "node_.*\.log"); do
+			for f in $(get_files "node_.*${UNITTEST_NUM}\.log"); do
 				dump_last_n_lines $f
 			done
 			dump_last_n_lines out$UNITTEST_NUM.log
@@ -629,26 +674,22 @@ function expect_normal_exit() {
 		false
 	fi
 	if [ "$CHECK_TYPE" != "none" ]; then
-		TRACE="$OLDTRACE"
-		if [ -f $VALGRIND_LOG_FILE ]; then
-			ignore_debug_info_errors ${VALGRIND_LOG_FILE}
-		fi
-
-		if [ -f $VALGRIND_LOG_FILE -a "${VALIDATE_VALGRIND_LOG}" = "1" ]; then
-			if [ ! -e $CHECK_TYPE$UNITTEST_NUM.log.match ] && grep "ERROR SUMMARY: [^0]" $VALGRIND_LOG_FILE >/dev/null; then
-				msg="failed"
-				[ -t 2 ] && command -v tput >/dev/null && msg="$(tput setaf 1)$msg$(tput sgr0)"
-				echo -e "$UNITTEST_NAME $msg with Valgrind. See $VALGRIND_LOG_FILE. First 20 lines below." >&2
-				paste -d " " <(yes $UNITTEST_NAME $VALGRIND_LOG_FILE | head -n 20) <(head -n 20 $VALGRIND_LOG_FILE) >&2
-				false
+		if [ $REMOTE_VALGRIND_LOG -eq 1 ]; then
+			for node in $CHECK_NODES
+			do
+				local log_file=node\_$node\_$VALGRIND_LOG_FILE
+				ignore_debug_info_errors $new_log_file
+				validate_valgrind_log $new_log_file
+			done
+		else
+			if [ -f $VALGRIND_LOG_FILE ]; then
+				ignore_debug_info_errors $VALGRIND_LOG_FILE
+				validate_valgrind_log $VALGRIND_LOG_FILE
 			fi
 		fi
-
-		if [ "$CHECK_TYPE" = "memcheck" -a "$MEMCHECK_DONT_CHECK_LEAKS" != "1" ]; then
-			export VALGRIND_OPTS="$OLD_VALGRIND_OPTS"
-		fi
 	fi
-	if [ "$CHECK_TYPE" = "memcheck" -a "$MEMCHECK_DONT_CHECK_LEAKS" = "1" ]; then
+
+	if [ "$MEMCHECK_DONT_CHECK_LEAKS" = "1" -a "$CHECK_TYPE" = "memcheck" ]; then
 		export ASAN_OPTIONS="${OLD_ASAN_OPTIONS}"
 	fi
 }
@@ -731,9 +772,23 @@ function require_no_superuser() {
 # require_test_type -- only allow script to continue for a certain test type
 #
 function require_test_type() {
+	req_test_type=1
 	for type in $*
 	do
-		[ "$type" = "$TEST" ] && return
+		case "$TEST"
+		in
+		all)
+			# "all" is a synonym of "short + medium + long"
+			return
+			;;
+		check)
+			# "check" is a synonym of "short + medium"
+			[ "$type" = "short" -o "$type" = "medium" ] && return
+			;;
+		*)
+			[ "$type" = "$TEST" ] && return
+			;;
+		esac
 	done
 	[ "$UNITTEST_QUIET" ] || echo "$UNITTEST_NAME: SKIP test-type $TEST ($* required)"
 	exit 0
@@ -744,7 +799,7 @@ function require_test_type() {
 #
 function require_pmem() {
 	[ $PMEM_IS_PMEM -eq 0 ] && return
-	echo "error: PMEM_FS_DIR=$PMEM_FS_DIR does not point to a PMEM device"
+	echo "error: PMEM_FS_DIR=$PMEM_FS_DIR does not point to a PMEM device" >&2
 	exit 1
 }
 
@@ -753,8 +808,82 @@ function require_pmem() {
 #
 function require_non_pmem() {
 	[ $NON_PMEM_IS_PMEM -ne 0 ] && return
-	echo "error: NON_PMEM_FS_DIR=$NON_PMEM_FS_DIR does not point to a non-PMEM device"
+	echo "error: NON_PMEM_FS_DIR=$NON_PMEM_FS_DIR does not point to a non-PMEM device" >&2
 	exit 1
+}
+
+#
+# require_dev_dax_node -- common function for require_dax_devices and
+# node_require_dax_device
+#
+# usage: require_dev_dax_node <N devices> [<node>]
+#
+function require_dev_dax_node() {
+	local min=$1
+	local node=$2
+	if [ -n "$node" ]; then
+		local DIR=${NODE_WORKING_DIR[$node]}/$curtestdir
+		local prefix="$UNITTEST_NAME: SKIP NODE $node:"
+		if [ -z "${NODE_DEVICE_DAX_PATH[$node]}" ]; then
+			echo "$prefix NODE_DEVICE_DAX_PATH[$node] is not set"
+			exit 0
+		fi
+		local device_dax_path=${NODE_DEVICE_DAX_PATH[$node]}
+		local cmd="ssh $SSH_OPTS ${NODE[$node]} cd $DIR && LD_LIBRARY_PATH=$REMOTE_LD_LIBRARY_PATH ../pmemdetect -d"
+	else
+		local prefix="$UNITTEST_NAME: SKIP"
+		if [ ${#DEVICE_DAX_PATH[@]} -lt $min ]; then
+			echo "$prefix DEVICE_DAX_PATH does not specify enough dax devices (min: $min)"
+			exit 0
+		fi
+		local device_dax_path=${DEVICE_DAX_PATH[@]}
+		local var_name="DEVICE_DAX_PATH"
+		local cmd="$PMEMDETECT -d"
+	fi
+
+	for path in ${device_dax_path[@]}
+	do
+		set +e
+		out=$($cmd $path 2>&1)
+		ret=$?
+		set -e
+
+		if [ "$ret" == "0" ]; then
+			return
+		elif [ "$ret" == "1" ]; then
+			echo "$prefix $out"
+			exit 0
+		else
+			echo "$UNITTEST_NAME: pmemdetect: $out" >&2
+			exit 1
+		fi
+	done
+}
+
+#
+# dax_device_zero -- zero all dax devices
+#
+function dax_device_zero() {
+	for path in ${DEVICE_DAX_PATH[@]}
+	do
+		${PMEMPOOL}.static-debug rm -f $path
+	done
+}
+
+#
+# require_dax_devices -- only allow script to continue for a dax device
+#
+function require_dax_devices() {
+	require_dev_dax_node $1
+}
+
+#
+# require_node_dax_device -- only allow script to continue if specified node
+# has defined device dax in testconfig.sh
+#
+function require_node_dax_device() {
+	validate_node_number $1
+	require_dev_dax_node 1 $1
 }
 
 #
@@ -795,6 +924,17 @@ function require_build_type() {
 }
 
 #
+# require_command -- only allow script to continue if specified command exists
+#
+function require_command() {
+	if ! command -pv $1 1>/dev/null
+	then
+		echo "$UNITTEST_NAME: SKIP: '$1' command required"
+		exit 0
+	fi
+}
+
+#
 # require_pkg -- only allow script to continue if specified package exists
 #
 function require_pkg() {
@@ -822,15 +962,16 @@ function require_node_pkg() {
 	shift
 
 	local DIR=${NODE_WORKING_DIR[$N]}/$curtestdir
-	local COMMAND=""
+	local COMMAND="${NODE_ENV[$N]}"
 	if [ -n "${NODE_LD_LIBRARY_PATH[$N]}" ]; then
-		COMMAND="PKG_CONFIG_PATH=\$PKG_CONFIG_PATH:${NODE_LD_LIBRARY_PATH[$N]}/pkgconfig"
+		local PKG_CONFIG_PATH=${NODE_LD_LIBRARY_PATH[$N]//:/\/pkgconfig:}/pkgconfig
+		COMMAND="$COMMAND PKG_CONFIG_PATH=\$PKG_CONFIG_PATH:$PKG_CONFIG_PATH"
 	fi
 
 	COMMAND="$COMMAND pkg-config $1"
 
 	set +e
-	run_command ssh $SSH_OPTS ${NODE[$N]} "cd $DIR && $COMMAND" 2>&1
+	run_command ssh $SSH_OPTS ${NODE[$N]} "$COMMAND" 2>&1
 	ret=$?
 	set -e
 
@@ -858,7 +999,7 @@ function configure_valgrind() {
 			echo "all valgrind tests disabled"
 		elif [ "$2" = "force-enable" ]; then
 			CHECK_TYPE="$1"
-			require_valgrind_$1
+			require_valgrind_tool $1 $3
 		elif [ "$2" = "force-disable" ]; then
 			CHECK_TYPE=none
 		else
@@ -876,7 +1017,7 @@ function configure_valgrind() {
 			echo "$UNITTEST_NAME: SKIP RUNTESTS script parameter $CHECK_TYPE tries to enable test defined in TEST as force-disable"
 			exit 0
 		fi
-		require_valgrind_$CHECK_TYPE
+		require_valgrind_tool $CHECK_TYPE $3
 	fi
 }
 
@@ -910,88 +1051,36 @@ function require_valgrind() {
 }
 
 #
-# require_valgrind_pmemcheck -- continue script execution only if
-#	valgrind with pmemcheck is installed
+# require_valgrind_tool -- continue script execution only if valgrind with
+#	specified tool is installed
 #
-function require_valgrind_pmemcheck() {
+#	usage: require_valgrind_tool <tool> [<binary>]
+#
+function require_valgrind_tool() {
 	require_valgrind
-	local binary=$1
-	[ -n "$binary" ] || binary=$(get_executables)
-        strings ${binary} 2>&1 | \
-            grep -q "compiled with support for Valgrind pmemcheck" && true
-        if [ $? -ne 0 ]; then
-            echo "$UNITTEST_NAME: SKIP not compiled with support for Valgrind pmemcheck"
-            exit 0
-        fi
-
-	valgrind --tool=pmemcheck --help 2>&1 | \
-		grep -q "pmemcheck is Copyright (c)" && true
-        if [ $? -ne 0 ]; then
-            echo "$UNITTEST_NAME: SKIP valgrind package with pmemcheck required"
-            exit 0;
-        fi
-
-        return
-}
-
-#
-# require_valgrind_helgrind -- continue script execution only if
-#	valgrind with helgrind is installed
-#
-function require_valgrind_helgrind() {
-	require_valgrind
-	local binary=$1
-	[ -n "$binary" ] || binary=$(get_executables)
-        strings ${binary}.static-debug 2>&1 | \
-            grep -q "compiled with support for Valgrind helgrind" && true
-        if [ $? -ne 0 ]; then
-            echo "$UNITTEST_NAME: SKIP not compiled with support for Valgrind helgrind"
-            exit 0
-        fi
-
-	valgrind --tool=helgrind --help 2>&1 | \
-		grep -q "Helgrind is Copyright (C)" && true
-        if [ $? -ne 0 ]; then
-            echo "$UNITTEST_NAME: SKIP valgrind package with helgrind required"
-            exit 0;
-        fi
-
-        return
-}
-
-#
-# require_valgrind_memcheck -- continue script execution only if
-#	valgrind with memcheck is installed
-#
-function require_valgrind_memcheck() {
-	require_valgrind
-	local binary=$1
+	local tool=$1
+	local binary=$2
+	local dir=.
+	[ -d "$2" ] && dir="$2" && binary=
+	pushd "$dir" > /dev/null
 	[ -n "$binary" ] || binary=$(get_executables)
 	strings ${binary} 2>&1 | \
-		grep -q "compiled with support for Valgrind memcheck" && true
+	grep -q "compiled with support for Valgrind $tool" && true
 	if [ $? -ne 0 ]; then
-		echo "$UNITTEST_NAME: SKIP not compiled with support for Valgrind memcheck"
+		echo "$UNITTEST_NAME: SKIP not compiled with support for Valgrind $tool"
 		exit 0
 	fi
 
-	return
-}
-
-#
-# require_valgrind_drd -- continue script execution only if
-#	valgrind with drd is installed
-#
-function require_valgrind_drd() {
-	require_valgrind
-	local binary=$1
-	[ -n "$binary" ] || binary=$(get_executables)
-	strings ${binary} 2>&1 | \
-		grep -q "compiled with support for Valgrind drd" && true
-	if [ $? -ne 0 ]; then
-		echo "$UNITTEST_NAME: SKIP not compiled with support for Valgrind drd"
-		exit 0
+	if [ "$tool" == "pmemcheck" -o "$tool" == "helgrind" ]; then
+		valgrind --tool=$tool --help 2>&1 | \
+		grep -qi "$tool is Copyright (c)" && true
+		if [ $? -ne 0 ]; then
+			echo "$UNITTEST_NAME: SKIP valgrind package with $tool required"
+			exit 0;
+		fi
 	fi
-	return
+	popd > /dev/null
+	return 0
 }
 
 #
@@ -1041,6 +1130,18 @@ function require_valgrind_dev_3_7() {
 		grep -q "VALGRIND_VERSION_3_7_OR_LATER" && return
 	echo "$UNITTEST_NAME: SKIP valgrind-devel package (ver 3.7 or later) required"
 	exit 0
+}
+
+#
+# valgrind_version -- returns Valgrind version
+#
+function valgrind_version() {
+	echo "#include <valgrind/valgrind.h>
+#if defined (__VALGRIND_MAJOR__) && defined (__VALGRIND_MINOR__)
+__VALGRIND_MAJOR__*100+__VALGRIND_MINOR__
+#else
+0
+#endif" | gcc ${EXTRA_CFLAGS} -E - | tail -n 1 | bc
 }
 
 #
@@ -1161,6 +1262,18 @@ function require_binary() {
 }
 
 #
+# check_absolute_path -- continue script execution only if $DIR path is
+#                        an absolute path; do not resolve symlinks
+#
+function check_absolute_path() {
+	if [ "${DIR:0:1}" != "/" ]; then
+		echo "Directory \$DIR has to be an absolute path."
+		echo "$DIR was given."
+		exit 1
+	fi
+}
+
+#
 # run_command -- run a command in a verbose or quiet way
 #
 function run_command()
@@ -1262,9 +1375,24 @@ function require_node_libfabric() {
 	shift
 
 	require_node_pkg $N libfabric
+	if [ "$RPMEM_DISABLE_LIBIBVERBS" != "y" ]; then
+		if ! fi_info --list | grep -q verbs; then
+			echo "$UNITTEST_NAME: SKIP libfabric not compiled with verbs provider"
+			exit 0
+		fi
+
+		if ! run_on_node $N "fi_info --list | grep -q verbs"; then
+			echo "$UNITTEST_NAME: SKIP libfabric on node $N not compiled with verbs provider"
+			exit 0
+
+		fi
+
+	fi
 
 	local DIR=${NODE_WORKING_DIR[$N]}/$curtestdir
-	local COMMAND="$COMMAND LD_LIBRARY_PATH=$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$N]} ../fip $*"
+	local COMMAND="$COMMAND ${NODE_ENV[$N]}"
+	COMMAND="$COMMAND LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$N]}"
+	COMMAND="$COMMAND ../fip ${NODE_ADDR[$N]} $*"
 
 	set +e
 	fip_out=$(ssh $SSH_OPTS ${NODE[$N]} "cd $DIR && $COMMAND" 2>&1)
@@ -1277,18 +1405,8 @@ function require_node_libfabric() {
 		echo "$UNITTEST_NAME: SKIP NODE $N: $fip_out"
 		exit 0
 	else
-		echo "NODE $N: require_libfabric $*: $fip_out"
+		echo "NODE $N: require_libfabric $*: $fip_out" >&2
 		exit 1
-	fi
-}
-
-# require_rpmem_port -- only allow script to continue if RPMEM_PORT variable
-#                       is set.
-#
-function require_rpmem_port() {
-	if [ -z "$RPMEM_PORT" ]; then
-		echo "$UNITTEST_NAME: SKIP: requires RPMEM_PORT"
-		exit 0
 	fi
 }
 
@@ -1359,18 +1477,12 @@ function require_nodes() {
 		fi
 	done
 
+	# remove all log files of the current unit test from the required nodes
 	for N in $NODES_SEQ; do
-		# remove all log files from the node N
-		rm -f $(find . -name "node_${N}_*$UNITTEST_NUM.log")
-
-		export_vars_node $N $REMOTE_VARS
-	done
-
-	# remove all log files from required nodes
-	for N in $NODES_SEQ; do
-		for f in $(get_files "node_${N}.*\.log"); do
+		for f in $(get_files "node_${N}.*${UNITTEST_NUM}\.log"); do
 			rm -f $f
 		done
+		export_vars_node $N $REMOTE_VARS
 	done
 
 	# register function to clean all remote nodes in case of an error or SIGINT
@@ -1402,7 +1514,7 @@ function copy_files_to_node() {
 
 #
 # copy_files_from_node -- copy all required files from the given remote node
-#    usage: copy_files_from_node <node> <destination dir> <file_1> [<file_2>] ...
+#    usage: copy_files_from_node <node> <destination_dir> <file_1> [<file_2>] ...
 #
 function copy_files_from_node() {
 
@@ -1410,22 +1522,21 @@ function copy_files_from_node() {
 
 	local N=$1
 	local DEST_DIR=$2
+	[ ! -d $DEST_DIR ] &&\
+		echo "error: destination directory $DEST_DIR does not exist" >&2 && exit 1
 	shift 2
 	[ $# -eq 0 ] &&\
 		echo "error: copy_files_from_node(): no files provided" >&2 && exit 1
 
-	# copy all required files
+	# compress required files, copy and extract
 	local REMOTE_DIR=${NODE_WORKING_DIR[$N]}/$curtestdir
-
-	if [ $# -ne 1 ]; then
-		FILE_STRING=$(printf ",%s" "$@")
-		FILE_STRING=\{${FILE_STRING:1}\}
-	else
-		FILE_STRING=$1
-	fi
-
-	run_command scp $SCP_OPTS ${NODE[$N]}:$REMOTE_DIR/$FILE_STRING $DEST_DIR
-
+	local temp_file=node_${N}_temp_file.tar
+	run_command ssh $SSH_OPTS ${NODE[$N]} "cd $REMOTE_DIR && tar -czf $temp_file $@"
+	run_command scp $SCP_OPTS ${NODE[$N]}:$REMOTE_DIR/$temp_file $DEST_DIR
+	cd $DEST_DIR \
+		&& tar -xzf $temp_file \
+		&& rm $temp_file \
+		&& cd - > /dev/null
 	return 0
 }
 
@@ -1511,7 +1622,7 @@ function run_on_node() {
 	local COMMAND="UNITTEST_NUM=$UNITTEST_NUM UNITTEST_NAME=$UNITTEST_NAME"
 	COMMAND="$COMMAND UNITTEST_QUIET=1"
 	COMMAND="$COMMAND ${NODE_ENV[$N]}"
-	COMMAND="$COMMAND LD_LIBRARY_PATH=$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$N]} $*"
+	COMMAND="$COMMAND LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$N]} $*"
 
 	run_command ssh $SSH_OPTS ${NODE[$N]} "cd $DIR && $COMMAND"
 	ret=$?
@@ -1543,7 +1654,7 @@ function run_on_node_background() {
 	local COMMAND="UNITTEST_NUM=$UNITTEST_NUM UNITTEST_NAME=$UNITTEST_NAME"
 	COMMAND="$COMMAND UNITTEST_QUIET=1"
 	COMMAND="$COMMAND ${NODE_ENV[$N]}"
-	COMMAND="$COMMAND LD_LIBRARY_PATH=$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$N]}"
+	COMMAND="$COMMAND LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$N]}"
 	COMMAND="$COMMAND ../ctrld $PID_FILE run $RUNTEST_TIMEOUT $*"
 
 	# register the PID file to be cleaned in case of an error
@@ -1656,6 +1767,12 @@ function create_holey_file_on_node() {
 # setup -- print message that test setup is commencing
 #
 function setup() {
+	# test type must be explicitly specified
+	if [ "$req_test_type" != "1" ]; then
+		echo "error: required test type is not specified" >&2
+		exit 1
+	fi
+
 	# fs type "none" must be explicitly enabled
 	if [ "$FS" = "none" -a "$req_fs_type" != "1" ]; then
 		exit 0
@@ -1682,6 +1799,9 @@ function setup() {
 	for f in $(get_files ".*[a-zA-Z_]${UNITTEST_NUM}\.log"); do
 		rm -f $f
 	done
+
+	# $DIR has to be an absolute path
+	check_absolute_path
 
 	if [ "$FS" != "none" ]; then
 		if [ -d "$DIR" ]; then
@@ -1870,7 +1990,7 @@ check_signature()
 {
 	local sig=$1
 	local file=$2
-	local file_sig=$(dd if=$file bs=1 count=$SIG_LEN 2>/dev/null)
+	local file_sig=$(dd if=$file bs=1 count=$SIG_LEN 2>/dev/null | tr -d \\0)
 
 	if [[ $sig != $file_sig ]]
 	then
@@ -1900,7 +2020,7 @@ check_layout()
 	local layout=$1
 	local file=$2
 	local file_layout=$(dd if=$file bs=1\
-		skip=$LAYOUT_OFFSET count=$LAYOUT_LEN 2>/dev/null)
+		skip=$LAYOUT_OFFSET count=$LAYOUT_LEN 2>/dev/null | tr -d \\0)
 
 	if [[ $layout != $file_layout ]]
 	then
@@ -1915,7 +2035,7 @@ check_layout()
 check_arena()
 {
 	local file=$1
-	local sig=$(dd if=$file bs=1 skip=$ARENA_OFF count=$ARENA_SIG_LEN 2>/dev/null)
+	local sig=$(dd if=$file bs=1 skip=$ARENA_OFF count=$ARENA_SIG_LEN 2>/dev/null | tr -d \\0)
 
 	if [[ $sig != $ARENA_SIG ]]
 	then
@@ -1937,40 +2057,8 @@ function dump_pool_info() {
 #
 function compare_replicas() {
 	set +e
-	diff <(dump_pool_info $1 $2) <(dump_pool_info $1 $3)
+	diff <(dump_pool_info $1 $2) <(dump_pool_info $1 $3) -I "^path" -I "^size"
 	set -e
-}
-
-#
-# rpmem_foreach_provider -- runs the script for each provider
-#
-function rpmem_foreach_provider() {
-	local script=${BASH_SOURCE[1]}
-	local providers="verbs sockets"
-	[ -n "$RPMEM_PROVIDERS" ] && providers=$RPMEM_PROVIDERS
-	if [ -z "$RPMEM_PROVIDER" ]; then
-		for prov in $providers; do
-			eval RPMEM_PROVIDER=$prov $script
-		done
-		exit 0
-	else
-		return 0
-	fi
-}
-
-#
-# rpmem_foreach_persist -- runs the script for each persistency method
-#
-function rpmem_foreach_persist() {
-	local script=${BASH_SOURCE[1]}
-	if [ -z "$RPMEM_PM" ]; then
-		for pm in GPSPM APM; do
-			eval RPMEM_PM=$pm $script
-		done
-		exit 0
-	else
-		return 0
-	fi
 }
 
 #
@@ -2003,12 +2091,22 @@ function init_rpmem_on_node() {
 	for slave in "$@"
 	do
 		validate_node_number $slave
-
+		local poolset_dir=${NODE_TEST_DIR[$slave]}
+		if [ -n "$RPMEM_POOLSET_DIR" ]; then
+			poolset_dir=$RPMEM_POOLSET_DIR
+		fi
+		local trace=
+		if [ -n "$(is_valgrind_enabled_on_node $slave)" ]; then
+			log_file=${CHECK_TYPE}${UNITTEST_NUM}.log
+			trace=$(get_trace $CHECK_TYPE $log_file $slave)
+		fi
 		CMD="cd ${NODE_TEST_DIR[$slave]} && "
-		CMD="$CMD LD_LIBRARY_PATH=$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$slave]}"
-		CMD="$CMD ../rpmemd"
+		CMD="$CMD ${NODE_ENV[$slave]}"
+		CMD="$CMD LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$REMOTE_LD_LIBRARY_PATH:${NODE_LD_LIBRARY_PATH[$slave]}"
+		CMD="$CMD $trace ../rpmemd"
 		CMD="$CMD --log-file=$RPMEMD_LOG_FILE"
-		CMD="$CMD --poolset-dir=${NODE_TEST_DIR[$slave]}"
+		CMD="$CMD --log-level=$RPMEMD_LOG_LEVEL"
+		CMD="$CMD --poolset-dir=$poolset_dir"
 
 		if [ "$RPMEM_PM" == "APM" ]; then
 			CMD="$CMD --persist-apm"
@@ -2043,9 +2141,10 @@ function init_rpmem_on_node() {
 	export_vars_node $master RPMEM_LOG_FILE
 	export_vars_node $master PMEMOBJ_LOG_LEVEL
 	export_vars_node $master PMEMOBJ_LOG_FILE
+	export_vars_node $master PMEMPOOL_LOG_FILE
+	export_vars_node $master PMEMPOOL_LOG_LEVEL
 
 	require_node_log_files $master rpmem$UNITTEST_NUM.log
-	require_node_log_files $slave rpmemd$UNITTEST_NUM.log
 	require_node_log_files $master $PMEMOBJ_LOG_FILE
 
 	# Workaround for SIGSEGV in the infinipath-psm during abort
@@ -2055,6 +2154,45 @@ function init_rpmem_on_node() {
 	# Issue require a fix in the infinipath-psm or the libfabric.
 	IPATH_NO_BACKTRACE=1
 	export_vars_node $master IPATH_NO_BACKTRACE
+}
+
+#
+# init_valgrind_on_node -- prepare valgrind on nodes
+#    usage: init_valgrind_on_node <check type> <node list>
+#
+function init_valgrind_on_node() {
+	# When librpmem is preloaded libfabric does not close all opened files
+	# before list of opened files is checked.
+	local UNITTEST_DO_NOT_CHECK_OPEN_FILES=1
+	local LD_PRELOAD=../$BUILD/librpmem.so
+	CHECK_NODES=""
+	CHECK_TYPE=$1
+	shift
+
+	for node in "$@"
+	do
+		validate_node_number $node
+		export_vars_node $node LD_PRELOAD
+		export_vars_node $node UNITTEST_DO_NOT_CHECK_OPEN_FILES
+		CHECK_NODES="$CHECK_NODES $node"
+	done
+}
+
+#
+# is_valgrind_enabled_on_node -- echo the node number if the node has
+#                                initialized valgrind environment by calling
+#                                init_valgrind_on_node
+#    usage: is_valgrind_enabled_on_node <node>
+#
+function is_valgrind_enabled_on_node() {
+	for node in $CHECK_NODES
+	do
+		if [ "$node" -eq "$1" ]; then
+			echo $1
+			return
+		fi
+	done
+	return
 }
 
 #
@@ -2148,4 +2286,6 @@ function copy_test_to_remote_nodes() {
 		# copy all required files
 		[ $# -gt 0 ] && run_command scp $SCP_OPTS $* ${NODE[$N]}:$DIR
 	done
+
+	return 0
 }

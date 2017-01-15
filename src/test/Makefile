@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -79,6 +79,7 @@ OBJ_TESTS = \
 	obj_heap_state\
 	obj_include\
 	obj_lane\
+	obj_layout\
 	obj_list_insert\
 	obj_list_move\
 	obj_list_recovery\
@@ -104,6 +105,7 @@ OBJ_TESTS = \
 	obj_toid\
 	obj_tx_alloc\
 	obj_tx_add_range\
+	obj_tx_callbacks\
 	obj_tx_lock\
 	obj_tx_add_range_direct\
 	obj_tx_flow\
@@ -114,17 +116,14 @@ OBJ_TESTS = \
 	obj_tx_mt\
 	obj_tx_realloc\
 	obj_tx_strdup\
-	obj_constructor
+	obj_constructor\
+	obj_oid
 
 OBJ_REMOTE_TESTS = \
 	obj_rpmem_basic_integration\
+	obj_rpmem_constructor\
+	obj_rpmem_heap_state\
 	obj_rpmem_heap_interrupt
-# XXX Temporarily disable 'obj_rpmem_constructor' and 'obj_rpmem_heap_state'
-# tests, because the first one times out and the second one fails on Travis.
-# These tests have not been enabled and run on Travis so far,
-# so they have never worked correctly.
-#	obj_rpmem_constructor
-#	obj_rpmem_heap_state
 
 OBJ_CPP_TESTS = \
 	obj_cpp_ptr\
@@ -138,7 +137,24 @@ OBJ_CPP_TESTS = \
 	obj_cpp_make_persistent_atomic\
 	obj_cpp_make_persistent_array\
 	obj_cpp_make_persistent_array_atomic\
-	obj_cpp_transaction
+	obj_cpp_transaction\
+	obj_cpp_allocator
+
+OBJ_CPP_CONTAINER_TESTS = \
+	obj_cpp_vector\
+	obj_cpp_deque\
+	obj_cpp_list\
+	obj_cpp_set\
+	obj_cpp_multiset\
+	obj_cpp_unordered_multiset\
+	obj_cpp_unordered_set\
+	obj_cpp_map\
+	obj_cpp_multimap\
+	obj_cpp_unordered_map\
+	obj_cpp_unordered_multimap\
+	obj_cpp_queue\
+	obj_cpp_priority_queue\
+	obj_cpp_stack
 
 CHRONO_TESTS = \
 	obj_cpp_mutex\
@@ -177,8 +193,8 @@ OTHER_TESTS = \
 
 PMEM_TESTS = \
 	pmem_is_pmem\
-	pmem_is_pmem_proc\
-	pmem_map\
+	pmem_is_pmem_proc_linux\
+	pmem_map_file\
 	pmem_memcpy\
 	pmem_memmove\
 	pmem_memset\
@@ -192,7 +208,9 @@ PMEMPOOL_TESTS = \
 	pmempool_dump\
 	pmempool_help\
 	pmempool_info\
-	pmempool_rm
+	pmempool_rm\
+	pmempool_sync\
+	pmempool_transform
 
 RPMEM_TESTS =\
 	rpmemd_config\
@@ -204,7 +222,8 @@ RPMEM_TESTS =\
 	rpmem_obc_int\
 	rpmemd_db\
 	rpmem_fip\
-	rpmem_basic
+	rpmem_basic\
+	rpmem_addr
 
 VMEM_TESTS = \
 	vmem_aligned_alloc\
@@ -260,6 +279,12 @@ LIBPMEMPOOL_TESTS = \
 	libpmempool_bttdev\
 	libpmempool_map_flog
 
+LIBPMEMPOOL_MOD_DEPS = \
+	libpmempool_sync
+LIBPMEMPOOL_MOD_TESTS = \
+	libpmempool_transform
+
+
 LOCAL_TESTS = \
 	$(OBJ_TESTS)\
 	$(BLK_TESTS)\
@@ -270,13 +295,15 @@ LOCAL_TESTS = \
 	$(VMEM_TESTS)\
 	$(VMMALLOC_TESTS)\
 	$(EXAMPLES_TESTS)\
-	$(LIBPMEMPOOL_TESTS)
+	$(LIBPMEMPOOL_TESTS)\
+	$(LIBPMEMPOOL_MOD_TESTS)
 
 REMOTE_TESTS = \
 	remote_basic\
 	remote_obj_basic\
 	$(OBJ_REMOTE_TESTS)\
-	$(RPMEM_TESTS)
+	$(RPMEM_TESTS)\
+	pmempool_sync_remote
 
 ifeq ($(filter n,$(call check_cxx_flags, -std=c++11) $(call check_clang_template_bug)),)
 LOCAL_TESTS += $(OBJ_CPP_TESTS)
@@ -296,6 +323,13 @@ else
 $(info NOTE: Skipping C++ tests because the compiler does not support C++11)
 endif
 
+# enable only when using custom standard libraries
+ifneq (,$(filter 1, $(USE_CUSTOM_GCC) $(USE_LLVM_LIBCPP)))
+LOCAL_TESTS += $(OBJ_CPP_CONTAINER_TESTS)
+else
+$(info NOTE: Skipping C++ container tests becasue a custom version of the standard library is not used)
+endif
+
 TESTS = \
 	$(LOCAL_TESTS)\
 	$(REMOTE_TESTS)
@@ -304,6 +338,7 @@ TESTS_BUILD = \
 	$(TEST_DEPS)\
 	$(OBJ_DEPS)\
 	$(LIBPMEMPOOL_DEPS)\
+	$(LIBPMEMPOOL_MOD_DEPS)\
 	$(TESTS)
 
 all     : TARGET = all
@@ -314,17 +349,6 @@ cstyle  : TARGET = cstyle
 format  : TARGET = format
 check   : TARGET = check
 pcheck  : TARGET = pcheck
-
-TEST_TYPE = check
-TEST_BUILD = all
-TEST_FS = all
-TEST_TIME = 3m
-MEMCHECK = auto
-CHECK_POOL =
-
-ifeq ($(CHECK_POOL),y)
-CHECK_POOL_OPT="-c"
-endif
 
 DIR_SYNC=$(TOP)/src/test/.sync-dir
 SYNC_EXT=synced
@@ -337,10 +361,11 @@ clean clobber: $(TESTS_BUILD)
 	$(RM) -r $(DIR_SYNC)
 	$(RM) *.$(SYNC_EXT)
 
-$(TESTS) $(OBJ_DEPS) $(LIBPMEMPOOL_DEPS): $(TEST_DEPS)
+$(TESTS) $(OBJ_DEPS) $(LIBPMEMPOOL_DEPS) $(LIBPMEMPOOL_MOD_DEPS): $(TEST_DEPS)
 
 $(OBJ_TESTS): $(OBJ_DEPS)
 $(LIBPMEMPOOL_TESTS): $(LIBPMEMPOOL_DEPS)
+$(LIBPMEMPOOL_MOD_TESTS): $(LIBPMEMPOOL_MOD_DEPS)
 
 obj_rpmem_basic_integration: obj_basic_integration
 
@@ -363,11 +388,11 @@ memcheck-summary-leaks:
 	grep "in use at exit" */memcheck*.log | grep -v " 0 bytes in 0 blocks" || true
 
 check: test
-	@./RUNTESTS -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -m $(MEMCHECK) $(CHECK_POOL_OPT) $(TESTS)
+	@./RUNTESTS $(RUNTEST_OPTIONS) $(TESTS)
 	@echo "No failures."
 
 check-remote-quiet: test
-	@./RUNTESTS -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -m $(MEMCHECK) $(CHECK_POOL_OPT) $(REMOTE_TESTS)
+	@./RUNTESTS $(RUNTEST_OPTIONS) $(REMOTE_TESTS)
 
 check-remote: check-remote-quiet
 	@echo "No failures."
@@ -447,7 +472,10 @@ ifneq ($(SKIP_SYNC_REMOTES),y)
 	$(MAKE) -C tools $@
 	$(MAKE) -C ../tools $@
 	$(MAKE) -C sync-remotes $@
-	$(foreach test, $(REMOTE_TESTS), $(MAKE) -C $(test) sync-test;)
+	@for test in $(REMOTE_TESTS); do \
+		echo "$(MAKE) -C $$test sync-test" ; \
+		$(MAKE) -C $$test sync-test || exit 1 ; \
+	done
 	@rm -rf $(DIR_SYNC)
 endif
 

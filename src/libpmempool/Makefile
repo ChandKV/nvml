@@ -39,6 +39,10 @@ LIBRARY_VERSION = 0.0
 INCS += -I$(TOP)/src/libpmemlog
 INCS += -I$(TOP)/src/libpmemblk
 INCS += -I$(TOP)/src/libpmemobj
+INCS += -I$(TOP)/src/rpmem_common
+INCS += -I$(TOP)/src/librpmem
+
+vpath %.c ../librpmem
 
 SOURCE =\
 	$(COMMON)/file.c\
@@ -62,7 +66,14 @@ SOURCE =\
 	check_pool_hdr.c\
 	check_util.c\
 	check_write.c\
-	pool.c
+	pool.c\
+	replica.c\
+	$(RPMEM_COMMON)/rpmem_common.c\
+	rpmem_ssh.c\
+	rpmem_cmd.c\
+	rpmem_util.c\
+	sync.c\
+	transform.c
 
 LIBPMEMBLK_PRIV_FUNCS=btt_info_set btt_arena_datasize btt_flog_size\
 	btt_map_size btt_flog_get_valid map_entry_is_initial btt_info_convert2h\
@@ -72,7 +83,9 @@ LIBPMEMLOG_PRIV_FUNCS=pmemlog_convert2h pmemlog_convert2le
 
 include ../Makefile.inc
 
-LIBS += -lpmem
+LIBS += -lpmem -ldl
+CFLAGS += -DUSE_LIBDL
+CFLAGS += -DUSE_RPMEM
 
 pmemblk_priv_funcs.o: $(PMEMBLK_PRIV_OBJ)
 	$(OBJCOPY) --localize-hidden $(addprefix -G, $(LIBPMEMBLK_PRIV_FUNCS)) \

@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  * Copyright (c) 2016, Microsoft Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,9 @@
 
 #ifndef NVML_SET_H
 #define NVML_SET_H 1
-
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -57,19 +59,27 @@
 #define POOL_LOCAL 0
 #define POOL_REMOTE 1
 
+#define REPLICAS_DISABLED 0
+#define REPLICAS_ENABLED 1
+
 struct pool_set_part {
 	/* populated by a pool set file parser */
 	const char *path;
 	size_t filesize;	/* aligned to page size */
 	int fd;
+	int flags;		/* stores flags used when opening the file */
+				/* valid only if fd >= 0 */
+	int is_dax;		/* indicates if the part is on device dax */
 	int created;		/* indicates newly created (zeroed) file */
 
 	/* util_poolset_open/create */
+	void *remote_hdr;	/* allocated header for remote replica */
 	void *hdr;		/* base address of header */
 	size_t hdrsize;		/* size of the header mapping */
 	void *addr;		/* base address of the mapping */
 	size_t size;		/* size of the mapping - page aligned */
-	int rdonly;
+	int rdonly;		/* is set based on compat features, affects */
+				/* the whole poolset */
 	uuid_t uuid;
 };
 
@@ -99,6 +109,22 @@ struct pool_set {
 	struct pool_replica *replica[];
 };
 
+struct part_file {
+	int is_remote;
+	const char *path;	/* not-NULL only for a local part file */
+	const char *node_addr;	/* address of a remote node */
+	/* poolset descriptor is a pool set file name on a remote node */
+	const char *pool_desc;	/* descriptor of a poolset */
+};
+
+struct pool_attr {
+	const unsigned char *poolset_uuid;	/* pool uuid */
+	const unsigned char *first_part_uuid;	/* first part uuid */
+	const unsigned char *prev_repl_uuid;	/* prev replica uuid */
+	const unsigned char *next_repl_uuid;	/* next replica uuid */
+	const unsigned char *user_flags;	/* user flags */
+};
+
 #define REP(set, r)\
 	((set)->replica[((set)->nreplicas + (r)) % (set)->nreplicas])
 
@@ -110,35 +136,34 @@ struct pool_set {
 
 int util_poolset_parse(struct pool_set **setp, const char *path, int fd);
 int util_poolset_read(struct pool_set **setp, const char *path);
+int util_poolset_create_set(struct pool_set **setp, const char *path,
+	size_t poolsize, size_t minsize);
+int util_poolset_open(struct pool_set *set);
 void util_poolset_close(struct pool_set *set, int del);
 void util_poolset_free(struct pool_set *set);
 int util_poolset_chmod(struct pool_set *set, mode_t mode);
 void util_poolset_fdclose(struct pool_set *set);
-int util_is_poolset(const char *path);
+int util_is_poolset_file(const char *path);
 int util_poolset_foreach_part(const char *path,
-	int (*cb)(const char *part_file, void *arg), void *arg);
+	int (*cb)(struct part_file *pf, void *arg), void *arg);
 size_t util_poolset_size(const char *path);
 
 int util_pool_create(struct pool_set **setp, const char *path, size_t poolsize,
 	size_t minsize, const char *sig,
 	uint32_t major, uint32_t compat, uint32_t incompat, uint32_t ro_compat,
-	unsigned *nlanes);
+	unsigned *nlanes, int can_have_rep);
 int util_pool_create_uuids(struct pool_set **setp, const char *path,
 	size_t poolsize, size_t minsize, const char *sig,
 	uint32_t major, uint32_t compat, uint32_t incompat, uint32_t ro_compat,
-	unsigned *nlanes,
-	const unsigned char *poolset_uuid,
-	const unsigned char *first_part_uuid,
-	const unsigned char *prev_repl_uuid,
-	const unsigned char *next_repl_uuid,
-	const unsigned char *arch_flags,
-	int remote);
+	unsigned *nlanes, int can_have_rep,
+	int remote, struct pool_attr *poolattr);
 
-int util_poolset_file(struct pool_set_part *part, size_t minsize, int create);
+int util_part_open(struct pool_set_part *part, size_t minsize, int create);
+void util_part_fdclose(struct pool_set_part *part);
 int util_replica_open(struct pool_set *set, unsigned repidx, int flags);
 int util_replica_close(struct pool_set *set, unsigned repidx);
 int util_map_part(struct pool_set_part *part, void *addr, size_t size,
-	size_t offset, int flags);
+	size_t offset, int flags, int rdonly);
 int util_unmap_part(struct pool_set_part *part);
 int util_unmap_parts(struct pool_replica *rep, unsigned start_index,
 	unsigned end_index);
@@ -147,11 +172,10 @@ int util_header_create(struct pool_set *set, unsigned repidx, unsigned partidx,
 	uint32_t ro_compat, const unsigned char *prev_repl_uuid,
 	const unsigned char *next_repl_uuid, const unsigned char *arch_flags);
 
-int util_map_hdr(struct pool_set_part *part, int flags);
+int util_map_hdr(struct pool_set_part *part, int flags, int rdonly);
 int util_unmap_hdr(struct pool_set_part *part);
 
-int util_pool_open_nocheck(struct pool_set **setp, const char *path,
-	int rdonly);
+int util_pool_open_nocheck(struct pool_set *set, int rdonly);
 int util_pool_open(struct pool_set **setp, const char *path, int rdonly,
 	size_t minsize, const char *sig, uint32_t major, uint32_t compat,
 	uint32_t incompat, uint32_t ro_compat, unsigned *nlanes);
@@ -169,10 +193,26 @@ void util_remote_init_lock(void);
 void util_remote_destroy_lock(void);
 int util_pool_close_remote(RPMEMpool *rpp);
 void util_remote_unload(void);
+void util_replica_fdclose(struct pool_replica *rep);
+int util_poolset_remote_open(struct pool_replica *rep, unsigned repidx,
+	size_t minsize, int create, void *pool_addr,
+	size_t pool_size, unsigned *nlanes);
+int util_remote_load(void);
+int util_replica_open_remote(struct pool_set *set, unsigned repidx, int flags);
+int util_poolset_remote_replica_open(struct pool_set *set, unsigned repidx,
+	size_t minsize, int create, unsigned *nlanes);
 
 extern int (*Rpmem_persist)(RPMEMpool *rpp, size_t offset, size_t length,
 								unsigned lane);
 extern int (*Rpmem_read)(RPMEMpool *rpp, void *buff, size_t offset,
 							size_t length);
+extern int (*Rpmem_close)(RPMEMpool *rpp);
+
+extern int (*Rpmem_remove)(const char *target,
+		const char *pool_set_name, int flags);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

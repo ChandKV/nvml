@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -44,7 +44,7 @@
  * util_uuid_to_string -- generate a string form of the uuid
  */
 int
-util_uuid_to_string(uuid_t u, char *buf)
+util_uuid_to_string(const uuid_t u, char *buf)
 {
 	int len; /* size that is returned from sprintf call */
 

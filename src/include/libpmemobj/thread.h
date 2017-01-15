@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,18 +47,21 @@ extern "C" {
 /*
  * Locking.
  */
-#define _POBJ_CL_ALIGNMENT 64 /* cache line alignment for performance */
+#define _POBJ_CL_SIZE 64 /* cache line size */
 
-typedef struct {
-	char padding[_POBJ_CL_ALIGNMENT];
+typedef union {
+	long long align;
+	char padding[_POBJ_CL_SIZE];
 } PMEMmutex;
 
-typedef struct {
-	char padding[_POBJ_CL_ALIGNMENT];
+typedef union {
+	long long align;
+	char padding[_POBJ_CL_SIZE];
 } PMEMrwlock;
 
-typedef struct {
-	char padding[_POBJ_CL_ALIGNMENT];
+typedef union {
+	long long align;
+	char padding[_POBJ_CL_SIZE];
 } PMEMcond;
 
 void pmemobj_mutex_zero(PMEMobjpool *pop, PMEMmutex *mutexp);

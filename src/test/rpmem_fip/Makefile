@@ -33,7 +33,6 @@
 #
 # src/test/rpmem_fip/Makefile -- build rpmem_fip test
 #
-SCP_TO_REMOTE_NODES = y
 
 include ../../common.inc
 
@@ -42,12 +41,15 @@ vpath %.c ../../rpmem_common/
 vpath %.c ../../tools/rpmemd
 
 ifeq ($(BUILD_RPMEM), y)
+SCP_TO_REMOTE_NODES = y
 TARGET = rpmem_fip
 OBJS = rpmem_fip_test.o\
-       rpmem_fip_sock.o\
+       rpmem_fip_oob.o\
        rpmem_fip.o\
        rpmemd_fip.o\
        rpmem_util.o\
+       rpmem_ssh.o\
+       rpmem_cmd.o\
        rpmem_common.o\
        rpmem_fip_common.o\
        rpmemd_fip_worker.o\
@@ -65,6 +67,7 @@ ifeq ($(BUILD_RPMEM), y)
 LIBS += $(shell $(PKG_CONFIG) --libs libfabric)
 CFLAGS += $(shell $(PKG_CONFIG) --cflags libfabric)
 CFLAGS += -DDEBUG
+CFLAGS += -DRPMEMC_LOG_RPMEM
 INCS += -I../../librpmem/
 INCS += -I../../rpmem_common/
 INCS += -I../../tools/rpmemd

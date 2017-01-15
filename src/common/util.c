@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,6 +39,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <endian.h>
+#include <errno.h>
 
 #include "util.h"
 #include "valgrind_internal.h"
@@ -69,8 +70,7 @@ Zalloc(size_t sz)
 	return memset(ret, 0, sz);
 }
 
-#if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND) ||\
-	defined(USE_VG_MEMCHECK)
+#ifdef ANY_VG_TOOL_ENABLED
 /* initialized to true if the process is running inside Valgrind */
 unsigned _On_valgrind;
 #endif
@@ -205,7 +205,7 @@ util_parse_size(const char *str, size_t *sizep)
 	int res = -1;
 	unsigned i;
 	size_t size = 0;
-	char unit[8] = {0};
+	char unit[9] = {0};
 
 	int ret = sscanf(str, "%zu%8s", &size, unit);
 	if (ret == 1) {
@@ -249,8 +249,23 @@ util_init(void)
 	}
 #endif
 
-#if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND) ||\
-	defined(USE_VG_MEMCHECK)
+#ifdef ANY_VG_TOOL_ENABLED
 	_On_valgrind = RUNNING_ON_VALGRIND;
 #endif
+}
+
+/*
+ * util_concat_str -- concatenate two strings
+ */
+char *
+util_concat_str(const char *s1, const char *s2)
+{
+	char *result = malloc(strlen(s1) + strlen(s2) + 1);
+	if (!result)
+		return NULL;
+
+	strcpy(result, s1);
+	strcat(result, s2);
+
+	return result;
 }

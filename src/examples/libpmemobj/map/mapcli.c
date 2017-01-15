@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,19 +30,20 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <ex_common.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
-#include <time.h>
+#include <inttypes.h>
 
 #include <libpmemobj.h>
 
 #include "map.h"
 #include "map_ctree.h"
 #include "map_btree.h"
+#include "map_rtree.h"
 #include "map_rbtree.h"
 #include "map_hashmap_atomic.h"
 #include "map_hashmap_tx.h"
@@ -71,7 +72,7 @@ static void
 str_insert(const char *str)
 {
 	uint64_t key;
-	if (sscanf(str, "%lu", &key) > 0)
+	if (sscanf(str, "%" PRIu64, &key) > 0)
 		map_insert(mapc, map, key, OID_NULL);
 	else
 		fprintf(stderr, "insert: invalid syntax\n");
@@ -84,7 +85,7 @@ static void
 str_remove(const char *str)
 {
 	uint64_t key;
-	if (sscanf(str, "%lu", &key) > 0) {
+	if (sscanf(str, "%" PRIu64, &key) > 0) {
 		int l = map_lookup(mapc, map, key);
 		if (l)
 			map_remove(mapc, map, key);
@@ -101,7 +102,7 @@ static void
 str_check(const char *str)
 {
 	uint64_t key;
-	if (sscanf(str, "%lu", &key) > 0) {
+	if (sscanf(str, "%" PRIu64, &key) > 0) {
 		int r = map_lookup(mapc, map, key);
 		printf("%d\n", r);
 	} else {
@@ -116,7 +117,7 @@ static void
 str_insert_random(const char *str)
 {
 	uint64_t val;
-	if (sscanf(str, "%lu", &val) > 0)
+	if (sscanf(str, "%" PRIu64, &val) > 0)
 		for (uint64_t i = 0; i < val; ) {
 			uint64_t r = ((uint64_t)rand()) << 32 | rand();
 			int ret = map_insert(mapc, map, r, OID_NULL);
@@ -141,7 +142,7 @@ rebuild(void)
 
 	map_cmd(mapc, map, HASHMAP_CMD_REBUILD, 0);
 
-	printf("%lus\n", time(NULL) - t1);
+	printf("%" PRIu64"s\n", time(NULL) - t1);
 }
 
 /*
@@ -152,9 +153,9 @@ str_rebuild(const char *str)
 {
 	uint64_t val;
 
-	if (sscanf(str, "%lu", &val) > 0) {
+	if (sscanf(str, "%" PRIu64, &val) > 0) {
 		for (uint64_t i = 0; i < val; ++i) {
-			printf("%2lu ", i);
+			printf("%2" PRIu64 " ", i);
 			rebuild();
 		}
 	} else {
@@ -185,14 +186,14 @@ unknown_command(const char *str)
 static int
 hashmap_print(uint64_t key, PMEMoid value, void *arg)
 {
-	printf("%lu ", key);
+	printf("%" PRIu64 " ", key);
 	return 0;
 }
 
 static void
 print_all(void)
 {
-	printf("count: %lu\n", map_count(mapc, map));
+	printf("count: %" PRIu64 "\n", map_count(mapc, map));
 	map_foreach(mapc, map, hashmap_print, NULL);
 	printf("\n");
 }
@@ -203,7 +204,8 @@ main(int argc, char *argv[])
 {
 	if (argc < 3 || argc > 4) {
 		printf("usage: %s "
-			"hashmap_tx|hashmap_atomic|ctree|btree|rbtree|skiplist"
+			"hashmap_tx|hashmap_atomic|"
+			"ctree|btree|rtree|rbtree|skiplist"
 				" file-name [<seed>]\n", argv[0]);
 		return 1;
 	}
@@ -219,6 +221,8 @@ main(int argc, char *argv[])
 		ops = MAP_CTREE;
 	} else if (strcmp(type, "btree") == 0) {
 		ops = MAP_BTREE;
+	} else if (strcmp(type, "rtree") == 0) {
+		ops = MAP_RTREE;
 	} else if (strcmp(type, "rbtree") == 0) {
 		ops = MAP_RBTREE;
 	} else if (strcmp(type, "skiplist") == 0) {
@@ -228,9 +232,10 @@ main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (access(path, F_OK) != 0) {
+	if (file_exists(path) != 0) {
 		pop = pmemobj_create(path, POBJ_LAYOUT_NAME(map),
-				PM_HASHSET_POOL_SIZE, S_IRUSR | S_IWUSR);
+			PM_HASHSET_POOL_SIZE, CREATE_MODE_RW);
+
 		if (pop == NULL) {
 			fprintf(stderr, "failed to create pool: %s\n",
 					pmemobj_errormsg());
@@ -242,7 +247,7 @@ main(int argc, char *argv[])
 		if (argc > 3)
 			args.seed = atoi(argv[3]);
 		else
-			args.seed = time(NULL);
+			args.seed = (uint32_t)time(NULL);
 		srand(args.seed);
 
 
@@ -256,7 +261,7 @@ main(int argc, char *argv[])
 		root = POBJ_ROOT(pop, struct root);
 
 		printf("seed: %u\n", args.seed);
-		map_new(mapc, &D_RW(root)->map, &args);
+		map_create(mapc, &D_RW(root)->map, &args);
 
 		map = D_RO(root)->map;
 	} else {

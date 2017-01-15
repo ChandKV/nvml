@@ -41,12 +41,14 @@ export VALGRIND_OPTS="--suppressions=excluded-errors.supp --leak-check=full\
 # standard unit test setup
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type any
 # there's no point in testing statically linked builds
 require_build_type debug nondebug
 require_valgrind_dev_3_7
 set_valgrind_exe_name
-configure_valgrind memcheck force-enable
+configure_valgrind memcheck force-enable $TEST_LD_LIBRARY_PATH/libvmmalloc.so
 setup
 
 unset VMMALLOC_LOG_LEVEL

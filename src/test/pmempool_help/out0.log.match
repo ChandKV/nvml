@@ -8,12 +8,14 @@ $(*)
   -h, --help           $(*)
 
 $(*)
-info	- $(*)
-create	- $(*)
-dump	- $(*)
-check	- $(*)
-rm	- remove pool or poolset
-convert	- $(*)
-help	- $(*)
+info		- $(*)
+create		- $(*)
+dump		- $(*)
+check		- $(*)
+rm		- remove pool or poolset
+convert		- $(*)
+sync		- $(*)
+transform	- $(*)
+help		- $(*)
 
 $(*) pmempool(1) $(*)

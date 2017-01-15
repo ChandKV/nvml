@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,7 +35,40 @@
  */
 
 #include <Shlwapi.h>
+#include <elf.h>
 #include "pool_hdr.h"
+#include "out.h"
+
+/*
+ * arch_machine -- (internal) translate CPU arch into ELF-compatible machine id
+ */
+static int
+arch_machine(WORD cpuarch)
+{
+	/* XXX: no support for other architectures yet */
+
+	switch (cpuarch) {
+		case PROCESSOR_ARCHITECTURE_AMD64:
+			return EM_X86_64;
+		case PROCESSOR_ARCHITECTURE_IA64:
+			return EM_IA_64;
+		case PROCESSOR_ARCHITECTURE_INTEL:
+			return EM_386;
+		default:
+			ASSERT(0); /* shouldn't happen */
+			return EM_NONE;
+	}
+}
+
+/*
+ * arch_endianness -- (internal) determine endianness
+ */
+static int
+arch_endianness(void)
+{
+	short word = (ELFDATA2MSB << 8) + ELFDATA2LSB;
+	return ((char *)&word)[0];
+}
 
 /*
  * util_get_arch_flags -- get architecture identification flags
@@ -46,9 +79,17 @@ util_get_arch_flags(struct arch_flags *arch_flags)
 	SYSTEM_INFO si;
 	GetSystemInfo(&si);
 
-	arch_flags->e_machine = si.wProcessorArchitecture;
-	arch_flags->ei_class = 0; /* XXX - si.dwProcessorType */
-	arch_flags->ei_data = 0;
+	arch_flags->e_machine = arch_machine(si.wProcessorArchitecture);
+#ifdef _WIN64
+	arch_flags->ei_class = ELFCLASS64;
+#else
+	/*
+	 * XXX - Just in case someone would remove the guard from platform.h
+	 * and attempt to compile NVML for 32-bit.
+	 */
+	arch_flags->ei_class = ELFCLASS32;
+#endif
+	arch_flags->ei_data = arch_endianness();
 	arch_flags->alignment_desc = alignment_desc();
 
 	return 0;

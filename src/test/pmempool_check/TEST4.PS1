@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,13 +39,11 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_check\TEST4"
 $Env:UNITTEST_NUM = "4"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
@@ -56,11 +54,15 @@ $LOG="out$Env:UNITTEST_NUM.log"
 
 rm $LOG -Force -Recurse -ea si
 
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -w blk 512 $POOL
+expect_normal_exit $PMEMPOOL create -w blk 512 $POOL
 check_file $POOL
+expect_normal_exit $PMEMPOOL info $POOL > $null
 &$PMEMSPOIL -v $POOL pool_hdr.checksum=0x0 >> $LOG
 
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX check -vry $POOL >> $LOG
+expect_abnormal_exit $PMEMPOOL check -vry $POOL >> $LOG
+expect_normal_exit $PMEMPOOL check -avry $POOL >> $LOG
+expect_normal_exit $PMEMPOOL check $POOL >> $LOG
+expect_normal_exit $PMEMPOOL info $POOL 2>&1 > $null
 
 check
 

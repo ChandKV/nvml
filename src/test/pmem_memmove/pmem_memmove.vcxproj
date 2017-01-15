@@ -14,7 +14,7 @@
     <ProjectGuid>{5A391A14-8E29-4788-93FC-EDADED31D32F}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>pmem_memmove</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.10240.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.14393.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -56,7 +56,7 @@
       </PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NTDDI_VERSION=NTDDI_WIN10_RS1;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ForcedIncludeFiles>platform.h</ForcedIncludeFiles>
     </ClCompile>
@@ -75,7 +75,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NTDDI_VERSION=NTDDI_WIN10_RS1;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ForcedIncludeFiles>platform.h</ForcedIncludeFiles>
     </ClCompile>
@@ -100,6 +100,32 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <None Include="err0.log.match" />
+    <None Include="err1.log.match" />
+    <None Include="err10.log.match" />
+    <None Include="err11.log.match" />
+    <None Include="err12.log.match" />
+    <None Include="err2.log.match" />
+    <None Include="err3.log.match" />
+    <None Include="err4.log.match" />
+    <None Include="err5.log.match" />
+    <None Include="err6.log.match" />
+    <None Include="err7.log.match" />
+    <None Include="err8.log.match" />
+    <None Include="err9.log.match" />
+    <None Include="out0.log.match" />
+    <None Include="out1.log.match" />
+    <None Include="out10.log.match" />
+    <None Include="out11.log.match" />
+    <None Include="out12.log.match" />
+    <None Include="out2.log.match" />
+    <None Include="out3.log.match" />
+    <None Include="out4.log.match" />
+    <None Include="out5.log.match" />
+    <None Include="out6.log.match" />
+    <None Include="out7.log.match" />
+    <None Include="out8.log.match" />
+    <None Include="out9.log.match" />
     <None Include="TEST0.PS1" />
     <None Include="TEST1.PS1" />
     <None Include="TEST10.PS1" />

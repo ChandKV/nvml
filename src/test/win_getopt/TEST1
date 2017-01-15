@@ -32,16 +32,18 @@
 #
 
 #
-# src/test/win_getopt/TEST0 -- unit test for windows getopt implementation
+# src/test/win_getopt/TEST1 -- unit test for windows getopt implementation
 #
-export UNITTEST_NAME=win_getopt/TEST0
-export UNITTEST_NUM=0
+export UNITTEST_NAME=win_getopt/TEST1
+export UNITTEST_NUM=1
 
 # standard unit test setup
 . ../unittest/unittest.sh
-$ERR=stderr${UNITTEST_NUM}.log
 
+require_test_type medium
 require_fs_type none
+
+ERR=stderr${UNITTEST_NUM}.log
 
 setup
 

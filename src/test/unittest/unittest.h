@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -84,6 +84,13 @@
 #ifndef _UNITTEST_H
 #define _UNITTEST_H 1
 
+#include <libpmem.h>
+#include <libpmemblk.h>
+#include <libpmemlog.h>
+#include <libpmemobj.h>
+#include <libpmempool.h>
+#include <libvmem.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -108,13 +115,6 @@ extern "C" {
 #include <errno.h>
 #include <dirent.h>
 #include <pthread.h>
-
-#include <libpmem.h>
-#include <libpmemblk.h>
-#include <libpmemlog.h>
-#include <libpmemobj.h>
-#include <libpmempool.h>
-#include <libvmem.h>
 
 int ut_get_uuid_str(char *);
 #define UT_MAX_ERR_MSG 128
@@ -281,6 +281,7 @@ void *ut_malloc(const char *file, int line, const char *func, size_t size);
 void *ut_calloc(const char *file, int line, const char *func,
     size_t nmemb, size_t size);
 void ut_free(const char *file, int line, const char *func, void *ptr);
+void ut_aligned_free(const char *file, int line, const char *func, void *ptr);
 void *ut_realloc(const char *file, int line, const char *func,
     void *ptr, size_t size);
 char *ut_strdup(const char *file, int line, const char *func,
@@ -308,6 +309,9 @@ int ut_munmap_anon_aligned(const char *file, int line, const char *func,
 
 #define FREE(ptr)\
     ut_free(__FILE__, __LINE__, __func__, ptr)
+
+#define ALIGNED_FREE(ptr)\
+    ut_aligned_free(__FILE__, __LINE__, __func__, ptr)
 
 /* a realloc() that can't return NULL */
 #define REALLOC(ptr, size)\
@@ -553,9 +557,6 @@ int ut_closedir(const char *file, int line, const char *func, DIR *dirp);
 
 #define CLOSEDIR(dirp)\
     ut_closedir(__FILE__, __LINE__, __func__, dirp)
-#endif
-
-#ifndef _WIN32
 #define ut_jmp_buf_t sigjmp_buf
 #define ut_siglongjmp(b) siglongjmp(b, 1)
 #define ut_sigsetjmp(b) sigsetjmp(b, 1)
@@ -563,8 +564,12 @@ int ut_closedir(const char *file, int line, const char *func, DIR *dirp);
 #define ut_jmp_buf_t jmp_buf
 #define ut_siglongjmp(b) longjmp(b, 1)
 #define ut_sigsetjmp(b) setjmp(b)
+static DWORD ErrMode;
+static BOOL Suppressed = FALSE;
+static UINT AbortBehave;
 #endif
-
+void ut_suppress_errmsg(void);
+void ut_unsuppress_errmsg(void);
 /*
  * signals...
  */
@@ -595,13 +600,46 @@ int ut_pthread_join(const char *file, int line, const char *func,
     ut_pthread_join(__FILE__, __LINE__, __func__, thread, value_ptr)
 
 /*
- * mocks...
+ * processes...
  */
+#ifdef _WIN32
+intptr_t ut_spawnv(int argc, const char **argv, ...);
+#endif
+
+/*
+ * mocks...
+ *
+ * NOTE: On Linux, function mocking is implemented using wrapper functions.
+ * See "--wrap" option of the GNU linker.
+ * There is no such feature in VC++, so on Windows we do the mocking at
+ * compile time, by redefining symbol names:
+ * - all the references to <symbol> are replaced with <__wrap_symbol>
+ *   in all the compilation units, except the one where the <symbol> is
+ *   defined and the test source file
+ * - the original definition of <symbol> is replaced with <__real_symbol>
+ * - a wrapper function <__wrap_symbol> must be defined in the test program
+ *   (it may still call the original function via <__real_symbol>)
+ * Such solution seems to be sufficient for the purpose of our tests, even
+ * though it has some limitations.  I.e. it does no work well with malloc/free,
+ * so to wrap the system memory allocator functions, we use the built-in
+ * feature of all the NVML libraries, allowing to override default memory
+ * allocator with the custom one.
+ */
+#ifndef _WIN32
 #define _FUNC_REAL_DECL(name, ret_type, ...)\
 	ret_type __real_##name(__VA_ARGS__) __attribute__((unused));
+#else
+#define _FUNC_REAL_DECL(name, ret_type, ...)\
+	ret_type name(__VA_ARGS__);
+#endif
 
+#ifndef _WIN32
 #define _FUNC_REAL(name)\
 	__real_##name
+#else
+#define _FUNC_REAL(name)\
+	name
+#endif
 
 #define RCOUNTER(name)\
 	_rcounter##name
@@ -611,7 +649,7 @@ int ut_pthread_join(const char *file, int line, const char *func,
 
 #define FUNC_MOCK(name, ret_type, ...)\
 	_FUNC_REAL_DECL(name, ret_type, ##__VA_ARGS__)\
-	static int RCOUNTER(name);\
+	static unsigned RCOUNTER(name);\
 	ret_type __wrap_##name(__VA_ARGS__);\
 	ret_type __wrap_##name(__VA_ARGS__) {\
 		switch (__sync_fetch_and_add(&RCOUNTER(name), 1)) {
@@ -639,7 +677,13 @@ int ut_pthread_join(const char *file, int line, const char *func,
 		FUNC_MOCK_RUN_RET_DEFAULT(ret);\
 	FUNC_MOCK_END
 
+#define FUNC_MOCK_RET_ALWAYS_VOID(name, ...)\
+	FUNC_MOCK(name, void, __VA_ARGS__)\
+		default: return;\
+	FUNC_MOCK_END
+
 extern unsigned long Ut_pagesize;
+extern unsigned long long Ut_mmap_align;
 
 void ut_dump_backtrace(void);
 void ut_sighandler(int);
@@ -696,6 +740,28 @@ _name(const struct test_case *tc, int argc, char *argv[])
 	.func = _name,\
 }
 
+#define STR(x) #x
+
+#define ASSERT_ALIGNED_BEGIN(type) do {\
+size_t off = 0;\
+const char *last = "(none)";\
+type t;
+
+#define ASSERT_ALIGNED_FIELD(type, field) do {\
+if (offsetof(type, field) != off)\
+	UT_FATAL("%s: padding, missing field or fields not in order between "\
+		"'%s' and '%s' -- offset %lu, real offset %lu",\
+		STR(type), last, STR(field), off, offsetof(type, field));\
+off += sizeof(t.field);\
+last = STR(field);\
+} while (0)
+
+#define ASSERT_ALIGNED_CHECK(type)\
+if (off != sizeof(type))\
+	UT_FATAL("%s: missing field or padding after '%s': "\
+		"sizeof(%s) = %lu, fields size = %lu",\
+		STR(type), last, STR(type), sizeof(type), off);\
+} while (0)
 
 #ifdef __cplusplus
 }

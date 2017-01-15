@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,7 +45,7 @@ struct hashmap_atomic;
 TOID_DECLARE(struct hashmap_atomic, HASHMAP_ATOMIC_TYPE_OFFSET + 0);
 
 int hm_atomic_check(PMEMobjpool *pop, TOID(struct hashmap_atomic) hashmap);
-int hm_atomic_new(PMEMobjpool *pop, TOID(struct hashmap_atomic) *map,
+int hm_atomic_create(PMEMobjpool *pop, TOID(struct hashmap_atomic) *map,
 		void *arg);
 int hm_atomic_init(PMEMobjpool *pop, TOID(struct hashmap_atomic) hashmap);
 int hm_atomic_insert(PMEMobjpool *pop, TOID(struct hashmap_atomic) hashmap,

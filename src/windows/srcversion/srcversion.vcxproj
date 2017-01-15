@@ -17,20 +17,20 @@
     <ProjectGuid>{901F04DB-E1A5-4A41-8B81-9D31C19ACD59}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>srcversion</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.10240.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.14393.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v140</PlatformToolset>
-    <CharacterSet />
+    <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v140</PlatformToolset>
-    <CharacterSet />
+    <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -72,7 +72,7 @@
       </Command>
     </PreBuildEvent>
     <CustomBuildStep>
-      <Command>powershell.exe -file $(SolutionDir)..\utils\SRCVERSION.ps1</Command>
+      <Command>powershell.exe -file "$(SolutionDir)..\utils\SRCVERSION.ps1"</Command>
       <Outputs>__NON_EXISTENT_FILE__</Outputs>
       <Message>generate srcversion.h</Message>
     </CustomBuildStep>
@@ -99,7 +99,7 @@
       </Command>
     </PreBuildEvent>
     <CustomBuildStep>
-      <Command>powershell.exe -file $(SolutionDir)..\utils\SRCVERSION.ps1</Command>
+      <Command>powershell.exe -file "$(SolutionDir)..\utils\SRCVERSION.ps1"</Command>
       <Outputs>__NON_EXISTENT_FILE__</Outputs>
       <Message>generate srcversion.h</Message>
     </CustomBuildStep>

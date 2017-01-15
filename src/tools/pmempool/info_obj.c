@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -338,7 +338,6 @@ info_obj_oob_hdr(struct pmem_info *pip, int v, struct oob_header *oob)
 	outv_title(v, "OOB Header");
 	outv_hexdump(v && pip->args.vhdrdump, oob, sizeof(*oob),
 		PTR_TO_OFF(pip->obj.pop, oob), 1);
-	outv_field(v, "Undo offset", "%llx", oob->undo_entry_offset);
 	outv_field(v, "Type Number", "0x%016lx", oob->type_num);
 
 }
@@ -888,8 +887,7 @@ info_obj_descriptor(struct pmem_info *pip)
 			pop->layout : "(null)";
 
 	/* address for checksum */
-	void *dscp = (void *)((uintptr_t)(&pop->hdr) +
-			sizeof(struct pool_hdr));
+	void *dscp = (void *)((uintptr_t)(pop) + sizeof(struct pool_hdr));
 
 	outv_field(v, "Layout", layout);
 	outv_field(v, "Lanes offset", "0x%lx", pop->lanes_offset);

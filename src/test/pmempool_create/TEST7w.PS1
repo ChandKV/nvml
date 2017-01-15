@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,21 +39,18 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_create\TEST7w"
 $Env:UNITTEST_NUM = "7w"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 # XXX: missing valgrind equivalent
 #
 #require_fs_type any
 #require_build_type nondebug debug
-#require_valgrind_memcheck $TEST_LD_LIBRARY_PATH/libpmemobj.so
 #
-#configure_valgrind memcheck force-enable
+#configure_valgrind memcheck force-enable "$TEST_LD_LIBRARY_PATH/libpmemobj.so"
 #export PMEMOBJ_VG_CHECK_UNDEF=1
 
 setup

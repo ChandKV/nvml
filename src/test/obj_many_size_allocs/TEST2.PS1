@@ -1,5 +1,5 @@
 #
-# Copyright 2015-2016, Intel Corporation
+# Copyright 2015-2017, Intel Corporation
 # Copyright (c) 2016, Microsoft Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -38,19 +38,17 @@ Param(
     )
 $Env:UNITTEST_NAME = "obj_many_size_allocs\TEST2"
 $Env:UNITTEST_NUM = "2"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 # standard unit test setup
 
 . ..\unittest\unittest.ps1
 
+require_test_type long
 setup
 
-$Env:PMEM_IS_PMEM_FORCE=1
+# limit number of emitted logs due to excessive log size
+$Env:PMEMOBJ_LOG_LEVEL=2
 
 create_poolset $DIR\testset1 16M:$DIR\testfile1 r 16M:$DIR\testfile2
 

@@ -40,21 +40,13 @@ export UNITTEST_NUM=4
 # standard unit test setup
 . ../unittest/unittest.sh
 
-require_fs_type any
-require_build_type nondebug debug
-
-rpmem_foreach_provider
-rpmem_foreach_persist
+require_test_type medium
 
 setup
 
 . setup.sh
 
-cat > $DIR/pool0.set << EOF
-PMEMPOOLSET
-8M $PART_DIR/pool0.part0
-8M $PART_DIR/pool0.part1
-EOF
+create_poolset $DIR/pool0.set  8M:$PART_DIR/pool0.part0 8M:$PART_DIR/pool0.part1
 
 run_on_node 0 "rm -rf $POOLS_DIR $POOLS_PART && mkdir -p $POOLS_DIR && mkdir -p $POOLS_PART"
 

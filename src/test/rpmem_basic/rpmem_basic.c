@@ -40,6 +40,7 @@
 #include "pool_hdr.h"
 #include "set.h"
 #include "util.h"
+#include "out.h"
 
 #include "rpmem_common.h"
 #include "rpmem_fip_common.h"
@@ -53,7 +54,11 @@
 #define UUID		"UUID0123456789AB"
 #define NEXT_UUID	"NEXT_UUID0123456"
 #define PREV_UUID	"PREV_UUID0123456"
-#define USER_FLAGS	"USER_FLAGS\0\0\0\0\0\0"
+/*
+ * Use default terminal command for terminating
+ * session in order to make sure this is not interpreted by terminal.
+ */
+#define USER_FLAGS	"USER_FLAGS\0\0\0\n~."
 #define POOL_ATTR_INIT {\
 	.signature = SIGNATURE,\
 	.major = MAJOR,\
@@ -89,16 +94,27 @@ init_pool(struct pool_entry *pool, const char *pool_path,
 	int ret = util_parse_size(pool_size, &pool->size);
 	UT_ASSERTeq(ret, 0);
 
+	int flags = PMEM_FILE_CREATE;
+	if (pool->size)
+		flags |= PMEM_FILE_EXCL;
+
+
 	if (strcmp(pool_path, "mem") == 0) {
-		pool->pool = MALLOC(pool->size);
+		pool->pool = PAGEALIGNMALLOC(pool->size);
+
 		pool->is_mem = 1;
 	} else {
 		pool->pool = pmem_map_file(pool_path, pool->size,
-			PMEM_FILE_CREATE | PMEM_FILE_EXCL,
-			0666, &pool->size, NULL);
+			flags, 0666, &pool->size, NULL);
 		UT_ASSERTne(pool->pool, NULL);
+
+		/* workaround for dev dax */
+		ret = madvise(pool->pool, pool->size, MADV_DONTFORK);
+		UT_ASSERTeq(ret, 0);
+
 		pool->is_mem = 0;
 		unlink(pool_path);
+		pool->size -= POOL_HDR_SIZE;
 	}
 }
 
@@ -111,7 +127,8 @@ free_pool(struct pool_entry *pool)
 	if (pool->is_mem)
 		FREE(pool->pool);
 	else
-		pmem_unmap(pool->pool, pool->size);
+		UT_ASSERTeq(pmem_unmap(pool->pool,
+			pool->size + POOL_HDR_SIZE), 0);
 
 	pool->pool = NULL;
 	pool->rpp = NULL;
@@ -289,17 +306,19 @@ test_persist(const struct test_case *tc, int argc, char *argv[])
 	int id = atoi(argv[0]);
 	UT_ASSERT(id >= 0 && id < MAX_IDS);
 	struct pool_entry *pool = &pools[id];
-
-	srand(atoi(argv[1]));
+	int seed = atoi(argv[1]);
 
 	int nthreads = atoi(argv[2]);
 	int nops = atoi(argv[3]);
 
-	uint8_t *buff = (uint8_t *)pool->pool;
 	size_t buff_size = pool->size;
 
-	for (size_t i = 0; i < buff_size; i++)
-		buff[i] = rand();
+	if (seed) {
+		srand(seed);
+		uint8_t *buff = (uint8_t *)pool->pool;
+		for (size_t i = 0; i < buff_size; i++)
+			buff[i] = rand();
+	}
 
 	pthread_t *threads = MALLOC(nthreads * sizeof(*threads));
 	struct thread_arg *args = MALLOC(nthreads * sizeof(*args));
@@ -357,6 +376,37 @@ test_read(const struct test_case *tc, int argc, char *argv[])
 }
 
 /*
+ * test_remove -- test case for remove operation
+ */
+static int
+test_remove(const struct test_case *tc, int argc, char *argv[])
+{
+	if (argc < 4)
+		UT_FATAL("usage: test_remove <target> <pool set> "
+			"<force> <rm pool set>");
+
+	const char *target = argv[0];
+	const char *pool_set = argv[1];
+	int force = atoi(argv[2]);
+	int rm_pool_set = atoi(argv[3]);
+
+	int flags = 0;
+
+	if (force)
+		flags |= RPMEM_REMOVE_FORCE;
+
+	if (rm_pool_set)
+		flags |= RPMEM_REMOVE_POOL_SET;
+
+	int ret;
+
+	ret = rpmem_remove(target, pool_set, flags);
+	UT_ASSERTeq(ret, 0);
+
+	return 4;
+}
+
+/*
  * check_pool -- check if remote pool contains specified random sequence
  */
 static int
@@ -372,9 +422,12 @@ check_pool(const struct test_case *tc, int argc, char *argv[])
 
 	size_t size;
 	ret = util_parse_size(argv[2], &size);
+	size -= POOL_HDR_SIZE;
 
 	struct pool_set *set;
-	ret = util_pool_open_nocheck(&set, pool_set, 0);
+	ret = util_poolset_create_set(&set, pool_set, 0, 0);
+	UT_ASSERTeq(ret, 0);
+	ret = util_pool_open_nocheck(set, 0);
 	UT_ASSERTeq(ret, 0);
 
 	uint8_t *data = set->replica[0]->part[0].addr;
@@ -403,7 +456,9 @@ fill_pool(const struct test_case *tc, int argc, char *argv[])
 	int ret;
 
 	struct pool_set *set;
-	ret = util_pool_open_nocheck(&set, pool_set, 0);
+	ret = util_poolset_create_set(&set, pool_set, 0, 0);
+	UT_ASSERTeq(ret, 0);
+	ret = util_pool_open_nocheck(set, 0);
 	UT_ASSERTeq(ret, 0);
 
 	uint8_t *data = set->replica[0]->part[0].addr;
@@ -424,6 +479,7 @@ static struct test_case test_cases[] = {
 	TEST_CASE(test_close),
 	TEST_CASE(test_persist),
 	TEST_CASE(test_read),
+	TEST_CASE(test_remove),
 	TEST_CASE(check_pool),
 	TEST_CASE(fill_pool),
 };
@@ -434,10 +490,14 @@ int
 main(int argc, char *argv[])
 {
 	util_init();
-	rpmem_fip_probe_get(NULL, NULL);
+	rpmem_fip_probe_get("localhost", NULL);
 	START(argc, argv, "rpmem_basic");
 
+	out_init("rpmem_basic", "TEST_LOG_LEVEL", "TEST_LOG_FILE", 0, 0);
+
 	TEST_CASE_PROCESS(argc, argv, test_cases, NTESTS);
+
+	out_fini();
 
 	DONE(NULL);
 }

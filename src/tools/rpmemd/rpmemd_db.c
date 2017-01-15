@@ -38,13 +38,14 @@
 #include <stdint.h>
 #include <errno.h>
 #include <string.h>
-#include <sys/queue.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/file.h>
 
+#include "queue.h"
 #include "set.h"
 #include "out.h"
+#include "file.h"
 #include "sys_util.h"
 
 #include "librpmem.h"
@@ -125,7 +126,8 @@ rpmemd_db_concat(const char *path1, const char *path2)
 	if (path2[0] == '/') {
 		RPMEMD_LOG(ERR, "the second path is not a relative one -- '%s'",
 				path2);
-		errno = EINVAL;
+		/* set to EBADR to distinguish this case from other errors */
+		errno = EBADR;
 		return NULL;
 	}
 
@@ -183,20 +185,24 @@ rpmemd_db_pool_create(struct rpmemd_db *db, const char *pool_desc,
 		goto err_free_prp;
 	}
 
+	struct pool_attr pattr;
+	pattr.poolset_uuid = attr->poolset_uuid;
+	pattr.first_part_uuid = attr->uuid;
+	pattr.prev_repl_uuid = attr->prev_uuid;
+	pattr.next_repl_uuid = attr->next_uuid;
+	pattr.user_flags = attr->user_flags;
+
 	ret = util_pool_create_uuids(&set, path,
-					0, pool_size,
+					0, RPMEM_MIN_POOL,
 					attr->signature,
 					attr->major,
 					attr->compat_features,
 					attr->incompat_features,
 					attr->ro_compat_features,
 					NULL,
-					attr->poolset_uuid,
-					attr->uuid,
-					attr->prev_uuid,
-					attr->next_uuid,
-					attr->user_flags,
-					POOL_REMOTE);
+					REPLICAS_DISABLED,
+					POOL_REMOTE,
+					&pattr);
 	if (ret) {
 		RPMEMD_LOG(ERR, "!cannot create pool set -- '%s'", path);
 		goto err_free_path;
@@ -255,7 +261,7 @@ rpmemd_db_pool_open(struct rpmemd_db *db, const char *pool_desc,
 		goto err_free_prp;
 	}
 
-	ret = util_pool_open_remote(&set, path, 0, pool_size,
+	ret = util_pool_open_remote(&set, path, 0, RPMEM_MIN_POOL,
 					attr->signature,
 					&attr->major,
 					&attr->compat_features,
@@ -307,10 +313,26 @@ rpmemd_db_pool_close(struct rpmemd_db *db, struct rpmemd_db_pool *prp)
 }
 
 /*
+ * rm_poolset_cb -- (internal) callback for removing part files
+ */
+static int
+rm_poolset_cb(struct part_file *pf, void *arg)
+{
+	if (pf->is_remote) {
+		RPMEMD_LOG(ERR, "removing remote replica not supported");
+		return -1;
+	}
+
+	util_unlink(pf->path);
+	return 0;
+}
+
+/*
  * rpmemd_db_pool_remove -- remove a pool set
  */
 int
-rpmemd_db_pool_remove(struct rpmemd_db *db, const char *pool_desc)
+rpmemd_db_pool_remove(struct rpmemd_db *db, const char *pool_desc,
+	int force, int pool_set)
 {
 	RPMEMD_ASSERT(db != NULL);
 	RPMEMD_ASSERT(pool_desc != NULL);
@@ -327,23 +349,49 @@ rpmemd_db_pool_remove(struct rpmemd_db *db, const char *pool_desc)
 		goto err_unlock;
 	}
 
-	ret = util_pool_open_nocheck(&set, path, 0);
-	if (ret) {
-		RPMEMD_LOG(ERR, "!cannot open pool set -- '%s'", path);
-		goto err_free_path;
-	}
+	if (force) {
+		ret = util_poolset_foreach_part(path, rm_poolset_cb, NULL);
+		if (ret) {
+			RPMEMD_LOG(ERR, "!removing '%s' failed", path);
+			goto err_free_path;
+		}
+	} else {
+		struct rpmem_pool_attr attr;
+		ret = util_pool_open_remote(&set, path, 0,
+				RPMEM_MIN_POOL,
+				attr.signature,
+				&attr.major,
+				&attr.compat_features,
+				&attr.incompat_features,
+				&attr.ro_compat_features,
+				attr.poolset_uuid,
+				attr.uuid,
+				attr.prev_uuid,
+				attr.next_uuid,
+				attr.user_flags);
+		if (ret) {
+			RPMEMD_LOG(ERR, "!removing '%s' failed", path);
+			goto err_free_path;
+		}
 
-	for (unsigned r = 0; r < set->nreplicas; r++) {
-		for (unsigned p = 0; p < set->replica[r]->nparts; p++) {
-			const char *part_file = set->replica[r]->part[p].path;
-			ret = unlink(part_file);
-			if (ret) {
-				RPMEMD_LOG(ERR, "!unlink -- '%s'", part_file);
+		for (unsigned r = 0; r < set->nreplicas; r++) {
+			for (unsigned p = 0; p < set->replica[r]->nparts; p++) {
+				const char *part_file =
+					set->replica[r]->part[p].path;
+				ret = util_unlink(part_file);
+				if (ret) {
+					RPMEMD_LOG(ERR, "!unlink -- '%s'",
+							part_file);
+				}
 			}
 		}
+
+		util_poolset_close(set, 0);
+
 	}
 
-	util_poolset_close(set, 1);
+	if (pool_set)
+		unlink(path);
 
 err_free_path:
 	free(path);

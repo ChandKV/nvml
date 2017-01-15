@@ -38,6 +38,8 @@ export UNITTEST_NUM=2
 
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type any
 
 setup
@@ -54,7 +56,7 @@ declare -A map_err=(["Initial"]="0" ["Error"]="4"
 
 ent_val=9
 
-for field in "${!map_err[@]}";
+for field in Zeroed Error Initial Normal;
 do
 	expect_normal_exit $BTTCREATE $POOL
 
@@ -91,7 +93,6 @@ do
 
 	expect_normal_exit $EXE$EXESUFFIX $POOL -r 1 -t btt -a 1
 	cat $LOG >> $LOG_TEMP
-	rm -f POOL
 done
 
 mv $LOG_TEMP $LOG

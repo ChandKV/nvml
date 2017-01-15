@@ -40,6 +40,8 @@ export UNITTEST_NUM=5
 # standard unit test setup
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type none
 require_build_type debug
 
@@ -48,7 +50,6 @@ setup
 export TRACE_LOG_LEVEL=4
 expect_normal_exit ./traces$EXESUFFIX 2>redir_stderr$UNITTEST_NUM.log
 
-# check results
-../match redir_stderr$UNITTEST_NUM.log.match
+check
 
 pass

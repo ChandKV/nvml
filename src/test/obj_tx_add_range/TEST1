@@ -41,11 +41,15 @@ export UNITTEST_NUM=1
 # standard unit test setup
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type pmem non-pmem
 configure_valgrind pmemcheck force-enable
 export VALGRIND_OPTS="--mult-stores=no"
 setup
 
 expect_normal_exit ./obj_tx_add_range$EXESUFFIX $DIR/testfile1 0
+
+check
 
 pass

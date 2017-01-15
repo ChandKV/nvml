@@ -46,6 +46,7 @@
 #include "map.h"
 #include "map_ctree.h"
 #include "map_btree.h"
+#include "map_rtree.h"
 #include "map_rbtree.h"
 #include "map_hashmap_atomic.h"
 #include "map_hashmap_tx.h"
@@ -397,6 +398,7 @@ static const struct {
 	{MAP_HASHMAP_ATOMIC, "hashmap_atomic"},
 	{MAP_CTREE, "ctree"},
 	{MAP_BTREE, "btree"},
+	{MAP_RTREE, "rtree"},
 	{MAP_RBTREE, "rbtree"},
 	{MAP_SKIPLIST, "skiplist"}
 };
@@ -422,7 +424,7 @@ int
 main(int argc, char *argv[])
 {
 	if (argc < 4) {
-		printf("usage: %s hashmap_tx|hashmap_atomic|ctree|btree|"
+		printf("usage: %s hashmap_tx|hashmap_atomic|ctree|btree|rtree|"
 				"rbtree|skiplist file-name port\n", argv[0]);
 		return 1;
 	}
@@ -466,7 +468,7 @@ main(int argc, char *argv[])
 	TOID(struct root) root = POBJ_ROOT(pop, struct root);
 	if (TOID_IS_NULL(D_RO(root)->map)) {
 		/* create new if it doesn't exist (a fresh pool) */
-		map_new(mapc, &D_RW(root)->map, NULL);
+		map_create(mapc, &D_RW(root)->map, NULL);
 	}
 	map = D_RO(root)->map;
 

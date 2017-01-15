@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,7 +37,7 @@
 #ifndef MAP_HASHMAP_ATOMIC_H
 #define MAP_HASHMAP_ATOMIC_H
 
-#include <libpmemobj.h>
+#include "map.h"
 
 extern struct map_ops hashmap_atomic_ops;
 

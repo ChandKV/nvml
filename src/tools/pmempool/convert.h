@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,6 +34,11 @@
  * convert.h -- pmempool convert command header file
  */
 
+#include <sys/types.h>
+
 int pmempool_convert_func(char *appname, int argc, char *argv[]);
 void pmempool_convert_help(char *appname);
-int convert_v1_v2(void *addr);
+
+void pmempool_convert_persist(void *poolset, const void *addr, size_t len);
+
+int convert_v1_v2(void *poolset, void *addr);

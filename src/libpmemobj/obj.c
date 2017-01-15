@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
  */
 #include <limits.h>
 
+#include "valgrind_internal.h"
 #include "libpmem.h"
 #include "ctree.h"
 #include "cuckoo.h"
@@ -45,7 +46,7 @@
 #include "pmemops.h"
 #include "set.h"
 #include "sync.h"
-#include "valgrind_internal.h"
+#include "tx.h"
 
 static struct cuckoo *pools_ht; /* hash table used for searching by UUID */
 static struct ctree *pools_tree; /* tree used for searching by address */
@@ -76,6 +77,9 @@ struct _pobj_pcache {
 static pthread_once_t Cached_pool_key_once = PTHREAD_ONCE_INIT;
 static pthread_key_t Cached_pool_key;
 
+/*
+ * _Cached_pool_key_alloc -- (internal) allocate pool cache pthread key
+ */
 static void
 _Cached_pool_key_alloc(void)
 {
@@ -84,6 +88,9 @@ _Cached_pool_key_alloc(void)
 		FATAL("!pthread_key_create");
 }
 
+/*
+ * pmemobj_direct -- returns the direct pointer of an object
+ */
 void *
 pmemobj_direct(PMEMoid oid)
 {
@@ -116,10 +123,75 @@ pmemobj_direct(PMEMoid oid)
 #endif /* _WIN32 */
 
 /*
+ * obj_pool_init -- (internal) allocate global structs holding all opened pools
+ *
+ * This is invoked on a first call to pmemobj_open() or pmemobj_create().
+ * Memory is released in library destructor.
+ */
+static void
+obj_pool_init(void)
+{
+	LOG(3, NULL);
+
+	if (pools_ht)
+		return;
+
+	pools_ht = cuckoo_new();
+	if (pools_ht == NULL)
+		FATAL("!cuckoo_new");
+
+	pools_tree = ctree_new();
+	if (pools_tree == NULL)
+		FATAL("!ctree_new");
+}
+
+/*
+ * pmemobj_oid -- return a PMEMoid based on the virtual address
+ *
+ * If the address does not belong to any pool OID_NULL is returned.
+ */
+PMEMoid
+pmemobj_oid(const void *addr)
+{
+	PMEMobjpool *pop = pmemobj_pool_by_ptr(addr);
+	if (pop == NULL)
+		return OID_NULL;
+
+	PMEMoid oid = {pop->uuid_lo, (uintptr_t)addr - (uintptr_t)pop};
+	return oid;
+}
+
+/*
  * User may decide to map all pools with MAP_PRIVATE flag using
  * PMEMOBJ_COW environment variable.
  */
 static int Open_cow;
+
+#ifdef USE_VG_MEMCHECK
+/*
+ * obj_vg_register -- register object in valgrind
+ */
+int
+obj_vg_register(uint64_t off, void *arg)
+{
+	PMEMobjpool *pop = arg;
+	struct oob_header *oobh = OBJ_OFF_TO_PTR(pop, off);
+
+	VALGRIND_DO_MAKE_MEM_DEFINED(oobh, sizeof(*oobh));
+
+	uint64_t obj_off = off + OBJ_OOB_SIZE;
+	void *obj_ptr = OBJ_OFF_TO_PTR(pop, obj_off);
+
+	size_t obj_size = OBJ_IS_ROOT(oobh) ?
+		OBJ_ROOT_SIZE(oobh) :
+		palloc_usable_size(&pop->heap, obj_off) - OBJ_OOB_SIZE;
+
+	VALGRIND_DO_MEMPOOL_ALLOC(pop->heap.layout, obj_ptr, obj_size);
+	VALGRIND_DO_MAKE_MEM_DEFINED(obj_ptr, obj_size);
+
+	return 0;
+}
+#endif
 
 /*
  * obj_init -- initialization of obj
@@ -131,7 +203,8 @@ obj_init(void)
 {
 	LOG(3, NULL);
 
-	COMPILE_ERROR_ON(sizeof(struct pmemobjpool) != POOL_HDR_SIZE + 4096);
+	COMPILE_ERROR_ON(sizeof(struct pmemobjpool) !=
+		POOL_HDR_SIZE + POOL_DESC_SIZE);
 
 #ifdef USE_COW_ENV
 	char *env = getenv("PMEMOBJ_COW");
@@ -143,14 +216,6 @@ obj_init(void)
 	/* XXX - temporary implementation (see above) */
 	pthread_once(&Cached_pool_key_once, _Cached_pool_key_alloc);
 #endif
-
-	pools_ht = cuckoo_new();
-	if (pools_ht == NULL)
-		FATAL("!cuckoo_new");
-
-	pools_tree = ctree_new();
-	if (pools_tree == NULL)
-		FATAL("!ctree_new");
 
 	lane_info_boot();
 
@@ -167,8 +232,10 @@ obj_fini(void)
 {
 	LOG(3, NULL);
 
-	cuckoo_delete(pools_ht);
-	ctree_delete(pools_tree);
+	if (pools_ht)
+		cuckoo_delete(pools_ht);
+	if (pools_tree)
+		ctree_delete(pools_tree);
 	lane_info_destroy();
 	util_remote_fini();
 }
@@ -560,7 +627,7 @@ pmemobj_vg_check_no_undef(struct pmemobjpool *pop)
 
 		VALGRIND_PRINTF("Part of the pool is left in undefined state on"
 				" boot. This is pmemobj's bug.\nUndefined"
-				" regions:\n");
+				" regions: [pool address: %p]\n", pop);
 		for (int i = 0; i < num_undefs; ++i)
 			VALGRIND_PRINTF("   [%p, %p]\n", undefs[i].start,
 					undefs[i].end);
@@ -580,21 +647,8 @@ pmemobj_vg_boot(struct pmemobjpool *pop)
 {
 	if (!On_valgrind)
 		return;
+
 	LOG(4, "pop %p", pop);
-
-	PMEMoid oid;
-	size_t rs = pmemobj_root_size(pop);
-	if (rs) {
-		oid = pmemobj_root(pop, rs);
-		palloc_vg_register_object(&pop->heap, oid,
-				pmemobj_root_size(pop));
-	}
-
-	for (oid = pmemobj_first(pop);
-			!OID_IS_NULL(oid); oid = pmemobj_next(oid)) {
-		palloc_vg_register_object(&pop->heap, oid,
-				pmemobj_alloc_usable_size(oid));
-	}
 
 	if (getenv("PMEMOBJ_VG_CHECK_UNDEF"))
 		pmemobj_vg_check_no_undef(pop);
@@ -634,7 +688,7 @@ pmemobj_descr_create(PMEMobjpool *pop, const char *layout, size_t poolsize)
 	ASSERTeq(poolsize % Pagesize, 0);
 
 	/* opaque info lives at the beginning of mapped memory pool */
-	void *dscp = (void *)((uintptr_t)(&pop->hdr) +
+	void *dscp = (void *)((uintptr_t)pop +
 				sizeof(struct pool_hdr));
 
 	/* create the persistent part of pool's descriptor */
@@ -685,7 +739,7 @@ pmemobj_descr_check(PMEMobjpool *pop, const char *layout, size_t poolsize)
 {
 	LOG(3, "pop %p layout %s poolsize %zu", pop, layout, poolsize);
 
-	void *dscp = (void *)((uintptr_t)(&pop->hdr) + sizeof(struct pool_hdr));
+	void *dscp = (void *)((uintptr_t)pop + sizeof(struct pool_hdr));
 
 	if (pop->rpp) {
 		/* read remote descriptor */
@@ -877,6 +931,8 @@ pmemobj_replica_init(PMEMobjpool *rep, struct pool_set *set, unsigned repidx,
 		rep->p_ops.pool_size = 0;
 	}
 
+	rep->is_dax = set->replica[repidx]->part[0].is_dax;
+
 	int ret;
 	if (repset->remote)
 		ret = pmemobj_replica_init_remote(rep, set, repidx, create);
@@ -932,6 +988,8 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int boot, unsigned nlanes)
 		}
 #endif
 
+		obj_pool_init();
+
 		if ((errno = cuckoo_insert(pools_ht, pop->uuid_lo, pop)) != 0) {
 			ERR("!cuckoo_insert");
 			return -1;
@@ -950,7 +1008,7 @@ pmemobj_runtime_init(PMEMobjpool *pop, int rdonly, int boot, unsigned nlanes)
 	 * The prototype PMFS doesn't allow this when large pages are in
 	 * use. It is not considered an error if this fails.
 	 */
-	util_range_none(pop->addr, sizeof(struct pool_hdr));
+	RANGE_NONE(pop->addr, sizeof(struct pool_hdr), pop->is_dax);
 
 	return 0;
 }
@@ -1003,7 +1061,8 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 	if (util_pool_create(&set, path, poolsize, PMEMOBJ_MIN_POOL,
 			OBJ_HDR_SIG, OBJ_FORMAT_MAJOR,
 			OBJ_FORMAT_COMPAT, OBJ_FORMAT_INCOMPAT,
-			OBJ_FORMAT_RO_COMPAT, &runtime_nlanes) != 0) {
+			OBJ_FORMAT_RO_COMPAT, &runtime_nlanes,
+			REPLICAS_ENABLED) != 0) {
 		LOG(2, "cannot create pool or pool set");
 		return NULL;
 	}
@@ -1055,6 +1114,8 @@ pmemobj_create(const char *path, const char *layout, size_t poolsize,
 
 	if (util_poolset_chmod(set, mode))
 		goto err;
+
+	util_poolset_fdclose(set);
 
 	LOG(3, "pop %p", pop);
 
@@ -1222,6 +1283,7 @@ pmemobj_open_common(const char *path, const char *layout, int cow, int boot)
 
 	/* pop is master replica from now on */
 	pop = set->replica[0]->part[0].addr;
+	set->poolsize = pop->heap_offset + pop->heap_size;
 
 	for (unsigned r = 0; r < set->nreplicas; r++) {
 		struct pool_replica *repset = set->replica[r];
@@ -1305,9 +1367,8 @@ pmemobj_open_common(const char *path, const char *layout, int cow, int boot)
 	pop->lanes_desc.runtime_nlanes = 0;
 
 #ifdef USE_VG_MEMCHECK
-	palloc_heap_vg_open((char *)pop + pop->heap_offset, pop->heap_size);
+	pop->vg_boot = boot;
 #endif
-
 	/* initialize runtime parts - lanes, obj stores, ... */
 	if (pmemobj_runtime_init(pop, 0, boot, runtime_nlanes) != 0) {
 		ERR("pool initialization failed");
@@ -1318,6 +1379,8 @@ pmemobj_open_common(const char *path, const char *layout, int cow, int boot)
 	if (boot)
 		pmemobj_vg_boot(pop);
 #endif
+
+	util_poolset_fdclose(set);
 
 	LOG(3, "pop %p", pop);
 
@@ -1475,6 +1538,10 @@ pmemobj_pool_by_oid(PMEMoid oid)
 {
 	LOG(3, "oid.off 0x%016jx", oid.off);
 
+	/* XXX this is a temporary fix, to be fixed properly later */
+	if (pools_ht == NULL)
+		return NULL;
+
 	return cuckoo_get(pools_ht, oid.pool_uuid_lo);
 }
 
@@ -1485,6 +1552,16 @@ PMEMobjpool *
 pmemobj_pool_by_ptr(const void *addr)
 {
 	LOG(3, "addr %p", addr);
+
+	/* fast path for transactions */
+	PMEMobjpool *pop = tx_get_pop();
+
+	if ((pop != NULL) && OBJ_PTR_FROM_POOL(pop, addr))
+		return pop;
+
+	/* XXX this is a temporary fix, to be fixed properly later */
+	if (pools_tree == NULL)
+		return NULL;
 
 	uint64_t key = (uint64_t)addr;
 	size_t pool_size = ctree_find_le(pools_tree, &key);
@@ -1525,7 +1602,6 @@ constructor_alloc_bytype(void *ctx, void *ptr, size_t usable_size, void *arg)
 	struct oob_header *pobj = OOB_HEADER_FROM_PTR(ptr);
 	struct carg_bytype *carg = arg;
 
-	pobj->undo_entry_offset = 0;
 	pobj->type_num = carg->user_type;
 	pobj->size = 0;
 	memset(pobj->unused, 0, sizeof(pobj->unused));
@@ -1676,7 +1752,6 @@ constructor_realloc(void *ctx, void *ptr, size_t usable_size, void *arg)
 	struct oob_header *pobj = OOB_HEADER_FROM_PTR(ptr);
 
 	if (ptr != carg->ptr) {
-		pobj->undo_entry_offset = 0;
 		pobj->type_num = carg->user_type;
 		pobj->size = 0;
 	}
@@ -2028,15 +2103,10 @@ constructor_alloc_root(void *ctx, void *ptr, size_t usable_size, void *arg)
 	else
 		pmemops_memset_persist(p_ops, ptr, 0, usable_size);
 
-	ro->undo_entry_offset = 0;
 	ro->type_num = POBJ_ROOT_TYPE_NUM;
 	ro->size = carg->size | OBJ_INTERNAL_OBJECT_MASK;
 
 	VALGRIND_REMOVE_FROM_TX(ro, OBJ_OOB_SIZE + usable_size);
-
-	pmemops_persist(p_ops, &ro->size,
-		/* there's no padding between these, so we can add sizes */
-		sizeof(ro->size) + sizeof(ro->type_num));
 
 	return ret;
 }
@@ -2105,7 +2175,7 @@ pmemobj_root_size(PMEMobjpool *pop)
 	if (pop->root_offset) {
 		struct oob_header *ro =
 			OOB_HEADER_FROM_OFF(pop, pop->root_offset);
-		return ro->size & ~OBJ_INTERNAL_OBJECT_MASK;
+		return OBJ_ROOT_SIZE(ro);
 	} else
 		return 0;
 }
@@ -2232,7 +2302,8 @@ pmemobj_list_insert(PMEMobjpool *pop, size_t pe_offset, void *head,
 
 	if (pe_offset >= pop->size) {
 		ERR("pe_offset (%lu) too big", pe_offset);
-		return EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	return list_insert(pop, (ssize_t)pe_offset, head, dest, before, oid);
@@ -2297,7 +2368,8 @@ pmemobj_list_remove(PMEMobjpool *pop, size_t pe_offset, void *head,
 
 	if (pe_offset >= pop->size) {
 		ERR("pe_offset (%lu) too big", pe_offset);
-		return EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (free) {
@@ -2329,12 +2401,14 @@ pmemobj_list_move(PMEMobjpool *pop, size_t pe_old_offset, void *head_old,
 
 	if (pe_old_offset >= pop->size) {
 		ERR("pe_old_offset (%lu) too big", pe_old_offset);
-		return EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (pe_new_offset >= pop->size) {
 		ERR("pe_new_offset (%lu) too big", pe_new_offset);
-		return EINVAL;
+		errno = EINVAL;
+		return -1;
 	}
 
 	return list_move(pop, pe_old_offset, head_old,

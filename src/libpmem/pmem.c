@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -174,6 +174,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <limits.h>
+
+#ifdef _WIN32
+#include <memoryapi.h>
+#endif
 
 #include "libpmem.h"
 
@@ -332,6 +337,15 @@ flush_clflushopt(const void *addr, size_t len)
 		uptr < (uintptr_t)addr + len; uptr += FLUSH_ALIGN) {
 		_mm_clflushopt((char *)uptr);
 	}
+}
+
+/*
+ * flush_empty -- (internal) do not flush the CPU cache
+ */
+static void
+flush_empty(const void *addr, size_t len)
+{
+	/* nop */
 }
 
 /*
@@ -512,6 +526,9 @@ pmem_is_pmem(const void *addr, size_t len)
 #define PMEM_FILE_ALL_FLAGS\
 	(PMEM_FILE_CREATE|PMEM_FILE_EXCL|PMEM_FILE_SPARSE|PMEM_FILE_TMPFILE)
 
+#define PMEM_DAX_VALID_FLAGS\
+	(PMEM_FILE_CREATE|PMEM_FILE_SPARSE)
+
 #ifndef USE_O_TMPFILE
 #ifdef O_TMPFILE
 #define USE_O_TMPFILE 1
@@ -534,11 +551,37 @@ pmem_map_file(const char *path, size_t len, int flags, mode_t mode,
 	int fd;
 	int open_flags = O_RDWR;
 	int delete_on_err = 0;
+	int dax = util_file_is_device_dax(path);
 
 	if (flags & ~(PMEM_FILE_ALL_FLAGS)) {
 		ERR("invalid flag specified %x", flags);
 		errno = EINVAL;
 		return NULL;
+	}
+
+	if (dax) {
+		if (flags & ~(PMEM_DAX_VALID_FLAGS)) {
+			ERR("invalid flag for device dax %x", flags);
+			errno = EINVAL;
+			return NULL;
+		} else {
+			/* we are ignoring all of the flags */
+			flags = 0;
+			ssize_t actual_len = util_file_get_size(path);
+			if (actual_len < 0) {
+				ERR("unable to read device dax size");
+				errno = EINVAL;
+				return NULL;
+			}
+			if (len != 0 && len != (size_t)actual_len) {
+				ERR("device dax length must be either 0 or "
+					"the exact size of the device %zu",
+					len);
+				errno = EINVAL;
+				return NULL;
+			}
+			len = 0;
+		}
 	}
 
 	if (flags & PMEM_FILE_CREATE) {
@@ -611,20 +654,14 @@ pmem_map_file(const char *path, size_t len, int flags, mode_t mode,
 			}
 		}
 	} else {
-		util_stat_t stbuf;
-
-		if (util_fstat(fd, &stbuf) < 0) {
-			ERR("!fstat %s", path);
-			goto err;
-		}
-
-		if (stbuf.st_size < 0) {
+		ssize_t actual_size = util_file_get_size(path);
+		if (actual_size < 0) {
 			ERR("stat %s: negative size", path);
 			errno = EINVAL;
 			goto err;
 		}
 
-		len = (size_t)stbuf.st_size;
+		len = (size_t)actual_size;
 	}
 
 	void *addr;
@@ -663,11 +700,8 @@ pmem_unmap(void *addr, size_t len)
 {
 	LOG(3, "addr %p len %zu", addr, len);
 
-	int ret = util_unmap(addr, len);
-
 	VALGRIND_REMOVE_PMEM_MAPPING(addr, len);
-
-	return ret;
+	return util_unmap(addr, len);
 }
 
 /*
@@ -1105,6 +1139,8 @@ pmem_log_cpuinfo(void)
 		LOG(3, "using clflushopt");
 	else if (Func_flush == flush_clflush)
 		LOG(3, "using clflush");
+	else if (Func_flush == flush_empty)
+		LOG(3, "not flushing CPU cache");
 	else
 		FATAL("invalid flush function address");
 
@@ -1162,6 +1198,13 @@ pmem_init(void)
 
 	pmem_get_cpuinfo();
 
+	char *e = getenv("PMEM_NO_FLUSH");
+	if (e && strcmp(e, "1") == 0) {
+		LOG(3, "forced not flushing CPU cache");
+		Func_flush = flush_empty;
+		Func_predrain_fence = predrain_fence_sfence;
+	}
+
 	/*
 	 * For testing, allow overriding the default threshold
 	 * for using non-temporal stores in pmem_memcpy_*(), pmem_memmove_*()
@@ -1189,6 +1232,12 @@ pmem_init(void)
 	}
 
 	pmem_log_cpuinfo();
+
+#if defined(_WIN32) && (NTDDI_VERSION >= NTDDI_WIN10_RS1)
+	Func_qvmi = (PQVM)GetProcAddress(
+			GetModuleHandle(TEXT("KernelBase.dll")),
+			"QueryVirtualMemoryInformation");
+#endif
 }
 
 

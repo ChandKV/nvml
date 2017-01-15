@@ -73,10 +73,10 @@ function run_cstyle() {
 # generate diff with clang-format rules
 #
 function run_clang_check() {
-	check_clang_version
 	if [ $# -eq 0 ]; then
 		return
 	fi
+	check_clang_version
 
 	for file in $@
 	do
@@ -92,15 +92,23 @@ function run_clang_check() {
 # in-place format according to clang-format rules
 #
 function run_clang_format() {
-	check_clang_version
 	if [ $# -eq 0 ]; then
 		return
 	fi
+	check_clang_version
 
 	${clang_format_bin} -style=file -i $@
 }
 
 for ((i=1; i<$#; i++)) {
+
+	IGNORE="$(dirname ${ARGS[$i]})/.cstyleignore"
+	if [ -e $IGNORE ]; then
+		if grep -q ${ARGS[$i]} $IGNORE ; then
+			echo "SKIP ${ARGS[$i]}"
+			continue
+		fi
+	fi
 	case ${ARGS[$i]} in
 		*.[ch]pp)
 			CLANG_ARGS+="${ARGS[$i]} "

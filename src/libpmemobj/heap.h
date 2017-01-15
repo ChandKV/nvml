@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,7 +45,7 @@
 #include "heap_layout.h"
 #include "memblock.h"
 #include "memops.h"
-#include "pmalloc.h"
+#include "palloc.h"
 
 #define MAX_BUCKETS (UINT8_MAX)
 #define RUN_UNIT_MAX 64U
@@ -62,14 +62,16 @@
  */
 #define SIZE_TO_ALLOC_BLOCKS(_s) (1 + (((_s) - 1) / ALLOC_BLOCK_SIZE))
 
+#define BIT_IS_CLR(a, i)	(!((a) & (1ULL << (i))))
+
 int heap_boot(struct palloc_heap *heap, void *heap_start, uint64_t heap_size,
 		void *base, struct pmem_ops *p_ops);
 int heap_init(void *heap_start, uint64_t heap_size, struct pmem_ops *p_ops);
-void heap_vg_open(void *heap_start, uint64_t heap_size);
 void heap_cleanup(struct palloc_heap *heap);
 int heap_check(void *heap_start, uint64_t heap_size);
 int heap_check_remote(void *heap_start, uint64_t heap_size,
 		struct remote_ops *ops);
+int heap_buckets_init(struct palloc_heap *heap);
 
 struct bucket *heap_get_best_bucket(struct palloc_heap *heap, size_t size);
 struct bucket *heap_get_chunk_bucket(struct palloc_heap *heap,
@@ -79,9 +81,6 @@ struct bucket *heap_get_auxiliary_bucket(struct palloc_heap *heap,
 void heap_drain_to_auxiliary(struct palloc_heap *heap, struct bucket *auxb,
 	uint32_t size_idx);
 void *heap_get_block_data(struct palloc_heap *heap, struct memory_block m);
-struct memory_block heap_coalesce(struct palloc_heap *heap,
-	struct memory_block *blocks[], int n, enum memblock_hdr_op op,
-	struct operation_context *ctx);
 
 int heap_get_adjacent_free_block(struct palloc_heap *heap, struct bucket *b,
 	struct memory_block *m, struct memory_block cnt, int prev);
@@ -100,16 +99,12 @@ pthread_mutex_t *heap_get_run_lock(struct palloc_heap *heap,
 struct memory_block heap_free_block(struct palloc_heap *heap, struct bucket *b,
 	struct memory_block m, struct operation_context *ctx);
 
-/* foreach callback, terminates iteration if return value is non-zero */
-typedef int (*object_callback)(uint64_t off, void *arg);
-
 void heap_foreach_object(struct palloc_heap *heap, object_callback cb,
 	void *arg, struct memory_block start);
 
-#ifdef DEBUG
-int heap_block_is_allocated(struct palloc_heap *heap, struct memory_block m);
-#endif /* DEBUG */
-
 void *heap_end(struct palloc_heap *heap);
+
+void heap_vg_open(struct palloc_heap *heap, object_callback cb,
+		void *arg, int objects);
 
 #endif

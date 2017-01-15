@@ -39,13 +39,11 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_create\TEST0"
 $Env:UNITTEST_NUM = "0"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
@@ -54,19 +52,19 @@ setup
 $POOL="$DIR\file.pool"
 
 # PMEMBLK
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create blk 512 $POOL
+expect_normal_exit $PMEMPOOL create blk 512 $POOL
 check_file $POOL
 check_signature PMEMBLK $POOL
 
 # PMEMLOG
 rm $POOL
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create log $POOL
+expect_normal_exit $PMEMPOOL create log $POOL
 check_file $POOL
 check_signature PMEMLOG $POOL
 
 # PMEMOBJ
 rm $POOL
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create --layout=LAYOUT_NAME obj $POOL
+expect_normal_exit $PMEMPOOL create --layout=LAYOUT_NAME obj $POOL
 check_file $POOL
 check_signature PMEMOBJ $POOL
 check_layout LAYOUT_NAME $POOL

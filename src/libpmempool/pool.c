@@ -36,11 +36,15 @@
 
 #include <stdio.h>
 #include <stdint.h>
-#include <sys/stat.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <endian.h>
+
+#ifndef _WIN32
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+#endif
 
 #include "libpmem.h"
 #include "libpmemlog.h"
@@ -181,8 +185,7 @@ err_pool_set:
 static int
 pool_set_map(const char *fname, struct pool_set **poolset, int rdonly)
 {
-	if (util_is_poolset(fname) != 1)
-		return util_pool_open_nocheck(poolset, fname, rdonly);
+	ASSERTeq(util_is_poolset_file(fname), 1);
 
 	struct pool_hdr hdr;
 	if (pool_set_read_header(fname, &hdr))
@@ -208,7 +211,7 @@ pool_set_map(const char *fname, struct pool_set **poolset, int rdonly)
 	if (util_pool_open(poolset, fname, rdonly, minsize, hdr.signature,
 			hdr.major, hdr.compat_features, hdr.incompat_features,
 			hdr.ro_compat_features, NULL)) {
-		ERR("openning poolset failed");
+		ERR("opening poolset failed");
 		return -1;
 	}
 
@@ -228,10 +231,8 @@ pool_params_from_header(struct pool_params *params, const struct pool_hdr *hdr)
 	 * next part UUID. If it is the same it means the pool consist of a
 	 * single file.
 	 */
-	int uuid_eq_next = memcmp(hdr->uuid, hdr->next_part_uuid,
-		POOL_HDR_UUID_LEN);
-	int uuid_eq_prev = memcmp(hdr->uuid, hdr->prev_part_uuid,
-		POOL_HDR_UUID_LEN);
+	int uuid_eq_next = uuidcmp(hdr->uuid, hdr->next_part_uuid);
+	int uuid_eq_prev = uuidcmp(hdr->uuid, hdr->prev_part_uuid);
 	params->is_part = !params->is_poolset && (uuid_eq_next || uuid_eq_prev);
 
 	params->type = pool_hdr_get_type(hdr);
@@ -266,54 +267,98 @@ pool_params_parse(const PMEMpoolcheck *ppc, struct pool_params *params,
 	int check)
 {
 	LOG(3, NULL);
-
 	int is_btt = ppc->args.pool_type == PMEMPOOL_POOL_TYPE_BTT;
-	util_stat_t stat_buf;
-	int ret = 0;
 
 	params->type = POOL_TYPE_UNKNOWN;
-	params->is_poolset = is_btt ? false : util_is_poolset(ppc->path) == 1;
+	params->is_poolset = util_is_poolset_file(ppc->path) == 1;
+
 	int fd = util_file_open(ppc->path, NULL, 0, O_RDONLY);
 	if (fd < 0)
 		return -1;
 
-	if (!params->is_poolset) {
-		/* get file size and mode */
-		if (util_fstat(fd, &stat_buf)) {
-			ret = -1;
-			goto out_close;
-		}
+	int ret = 0;
 
-		ASSERT(stat_buf.st_size >= 0);
-		params->size = (uint64_t)stat_buf.st_size;
-		params->mode = stat_buf.st_mode;
-	}
+	util_stat_t stat_buf;
+	ret = util_fstat(fd, &stat_buf);
+	if (ret)
+		goto out_close;
 
-	void *addr = NULL;
-	struct pool_set *set = NULL;
+	ASSERT(stat_buf.st_size >= 0);
+
+	params->mode = stat_buf.st_mode;
+
+	struct pool_set *set;
+	void *addr;
 	if (params->is_poolset) {
-		/* close the file */
+		/*
+		 * Need to close the poolset because it will be opened with
+		 * flock in the following instructions.
+		 */
 		close(fd);
 		fd = -1;
 
 		if (check) {
-			if (pool_set_map(ppc->path, &set, 1))
+			if (pool_set_map(ppc->path, &set, 0))
 				return -1;
 		} else {
-			if (util_pool_open_nocheck(&set, ppc->path, 1))
+			ret = util_poolset_create_set(&set, ppc->path, 0, 0);
+			if (ret < 0) {
+				LOG(2, "cannot open pool set -- '%s'",
+					ppc->path);
+				return -1;
+			}
+			if (set->remote) {
+				ERR("poolsets with remote replicas are not "
+					"supported");
+				return -1;
+			}
+			if (util_pool_open_nocheck(set, 0))
 				return -1;
 		}
 
 		params->size = set->poolsize;
 		addr = set->replica[0]->part[0].addr;
-	} else if (!is_btt) {
-		addr = mmap(NULL, (uint64_t)stat_buf.st_size, PROT_READ,
-			MAP_PRIVATE, fd, 0);
+
+		/*
+		 * XXX mprotect for device dax with length not aligned to its
+		 * page granularity causes SIGBUS on the next page fault.
+		 * The length argument of this call should be changed to
+		 * set->poolsize once the kernel issue is solved.
+		 */
+		if (mprotect(addr, set->replica[0]->repsize,
+			PROT_READ) < 0) {
+			ERR("!mprotect");
+			goto out_unmap;
+		}
+		params->is_device_dax = set->replica[0]->part[0].is_dax;
+	} else if (is_btt) {
+		params->size = (size_t)stat_buf.st_size;
+#ifndef _WIN32
+		if (params->mode & S_IFBLK)
+			if (ioctl(fd, BLKGETSIZE64, &params->size)) {
+				ERR("!ioctl");
+				goto out_close;
+			}
+#endif
+		addr = NULL;
+	} else {
+		ssize_t s = util_file_get_size(ppc->path);
+		if (s < 0) {
+			ret = -1;
+			goto out_close;
+		}
+		params->size = (size_t)s;
+		addr = mmap(NULL, (uint64_t)params->size, PROT_READ,
+			MAP_SHARED, fd, 0);
 		if (addr == MAP_FAILED) {
 			ret = -1;
 			goto out_close;
 		}
-	} else {
+		params->is_device_dax = util_file_is_device_dax(ppc->path);
+	}
+
+	/* stop processing for BTT device */
+	if (is_btt) {
 		params->type = POOL_TYPE_BTT;
 		params->is_part = false;
 		goto out_close;
@@ -346,13 +391,18 @@ pool_params_parse(const PMEMpoolcheck *ppc, struct pool_params *params,
 	}
 
 out_unmap:
-	if (params->is_poolset)
+	if (params->is_poolset) {
+		ASSERTeq(fd, -1);
+		ASSERTne(addr, NULL);
 		util_poolset_close(set, 0);
-	else if (!is_btt)
-		munmap(addr, (uint64_t)stat_buf.st_size);
+	} else if (!is_btt) {
+		ASSERTne(fd, -1);
+		ASSERTne(addr, NULL);
+		munmap(addr, params->size);
+	}
 out_close:
-	if (fd >= 0)
-		(void) close(fd);
+	if (fd != -1)
+		close(fd);
 	return ret;
 }
 
@@ -375,7 +425,12 @@ pool_set_file_open(const char *fname, struct pool_params *params, int rdonly)
 	const char *path = file->fname;
 
 	if (params->type != POOL_TYPE_BTT) {
-		if (util_pool_open_nocheck(&file->poolset, file->fname, rdonly))
+		int ret = util_poolset_create_set(&file->poolset, path, 0, 0);
+		if (ret < 0) {
+			LOG(2, "cannot open pool set -- '%s'", path);
+			goto err_free_fname;
+		}
+		if (util_pool_open_nocheck(file->poolset, rdonly))
 			goto err_free_fname;
 
 		file->size = file->poolset->poolsize;
@@ -402,7 +457,7 @@ pool_set_file_open(const char *fname, struct pool_params *params, int rdonly)
 err_close_poolset:
 	if (params->type != POOL_TYPE_BTT)
 		util_poolset_close(file->poolset, 0);
-	else
+	else if (file->fd != -1)
 		close(file->fd);
 err_free_fname:
 	free(file->fname);
@@ -459,10 +514,34 @@ pool_data_alloc(PMEMpoolcheck *ppc)
 	if (pool_params_parse(ppc, &pool->params, 0))
 		goto error;
 
-	int rdonly = CHECK_WITHOUT_FIXING(ppc);
-	pool->set_file = pool_set_file_open(ppc->path, &pool->params, rdonly);
-	if (!pool->set_file)
+	int rdonly = CHECK_IS_NOT(ppc, REPAIR);
+	int prv = CHECK_IS(ppc, DRY_RUN);
+
+	if (prv && pool->params.is_device_dax) {
+		errno = ENOTSUP;
+		ERR("!cannot perform a dry run on dax device");
 		goto error;
+	}
+
+	pool->set_file = pool_set_file_open(ppc->path, &pool->params, prv);
+	if (pool->set_file == NULL)
+		goto error;
+
+	/*
+	 * XXX mprotect for device dax with length not aligned to its
+	 * page granularity causes SIGBUS on the next page fault.
+	 * The length argument of this call should be changed to
+	 * pool->set_file->poolsize once the kernel issue is solved.
+	 */
+	if (rdonly && mprotect(pool->set_file->addr,
+		pool->set_file->poolset->replica[0]->repsize,
+		PROT_READ) < 0)
+		goto error;
+
+	if (pool->params.type != POOL_TYPE_BTT) {
+		if (pool_set_file_map_headers(pool->set_file, rdonly, prv))
+			goto error;
+	}
 
 	return pool;
 
@@ -499,8 +578,11 @@ pool_data_free(struct pool_data *pool)
 {
 	LOG(3, NULL);
 
-	if (pool->set_file)
+	if (pool->set_file) {
+		if (pool->params.type != POOL_TYPE_BTT)
+			pool_set_file_unmap_headers(pool->set_file);
 		pool_set_file_close(pool->set_file);
+	}
 
 	while (!TAILQ_EMPTY(&pool->arenas)) {
 		struct arena *arenap = TAILQ_FIRST(&pool->arenas);
@@ -575,16 +657,30 @@ pool_write(struct pool_data *pool, const void *buff, size_t nbytes,
  * pool_copy -- make a copy of the pool
  */
 int
-pool_copy(struct pool_data *pool, const char *dst_path)
+pool_copy(struct pool_data *pool, const char *dst_path, int overwrite)
 {
 	struct pool_set_file *file = pool->set_file;
-	int dfd = util_file_create(dst_path, file->size, 0);
+	int dfd;
+	if (!access(dst_path, F_OK)) {
+		if (!overwrite) {
+			errno = EEXIST;
+			return -1;
+		}
+		dfd = util_file_open(dst_path, NULL, 0, O_RDWR);
+	} else {
+		if (errno == ENOENT) {
+			errno = 0;
+			dfd = util_file_create(dst_path, file->size, 0);
+		} else {
+			return -1;
+		}
+	}
 	if (dfd < 0)
 		return -1;
 
 	int result = 0;
-	struct stat stat_buf;
-	if (stat(file->fname, &stat_buf)) {
+	util_stat_t stat_buf;
+	if (util_stat(file->fname, &stat_buf)) {
 		result = -1;
 		goto out_close;
 	}
@@ -614,7 +710,10 @@ pool_copy(struct pool_data *pool, const char *dst_path)
 		goto out_unmap;
 	}
 
-	pool_btt_lseek(pool, 0, SEEK_SET);
+	if (pool_btt_lseek(pool, 0, SEEK_SET) == -1) {
+		result = -1;
+		goto out_free;
+	}
 	ssize_t buf_read = 0;
 	void *dst = daddr;
 	while ((buf_read = pool_btt_read(pool, buf, RW_BUFFERING_SIZE))) {
@@ -625,12 +724,12 @@ pool_copy(struct pool_data *pool, const char *dst_path)
 		dst  = (void *)((ssize_t)dst + buf_read);
 	}
 
+out_free:
 	free(buf);
 out_unmap:
 	munmap(daddr, file->size);
 out_close:
-	if (dfd >= 0)
-		close(dfd);
+	(void) close(dfd);
 	return result;
 }
 
@@ -638,7 +737,8 @@ out_close:
  * pool_set_part_copy -- make a copy of the poolset part
  */
 int
-pool_set_part_copy(struct pool_set_part *dpart, struct pool_set_part *spart)
+pool_set_part_copy(struct pool_set_part *dpart, struct pool_set_part *spart,
+	int overwrite)
 {
 	LOG(3, "dpart %p spart %p", dpart, spart);
 
@@ -657,9 +757,28 @@ pool_set_part_copy(struct pool_set_part *dpart, struct pool_set_part *spart)
 
 	size_t dmapped = 0;
 	int is_pmem;
-	void *daddr = pmem_map_file(dpart->path, dpart->filesize,
-		PMEM_FILE_CREATE | PMEM_FILE_EXCL, stat_buf.st_mode, &dmapped,
-		&is_pmem);
+	void *daddr;
+
+	if (!access(dpart->path, F_OK)) {
+		if (!overwrite) {
+			errno = EEXIST;
+			result = -1;
+			goto out_sunmap;
+		}
+
+		daddr = pmem_map_file(dpart->path, 0, 0, S_IWRITE, &dmapped,
+			&is_pmem);
+	} else {
+		if (errno == ENOENT) {
+			errno = 0;
+			daddr = pmem_map_file(dpart->path, dpart->filesize,
+				PMEM_FILE_CREATE | PMEM_FILE_EXCL,
+				stat_buf.st_mode, &dmapped, &is_pmem);
+		} else {
+			result = -1;
+			goto out_sunmap;
+		}
+	}
 	if (!daddr) {
 		result = -1;
 		goto out_sunmap;
@@ -669,7 +788,7 @@ pool_set_part_copy(struct pool_set_part *dpart, struct pool_set_part *spart)
 		pmem_memcpy_persist(daddr, saddr, smapped);
 	} else {
 		memcpy(daddr, saddr, smapped);
-		pmem_msync(daddr, smapped);
+		PERSIST_GENERIC(dpart->is_dax, daddr, smapped);
 	}
 
 	pmem_unmap(daddr, dmapped);
@@ -689,7 +808,9 @@ pool_memset(struct pool_data *pool, uint64_t off, int c, size_t count)
 	if (pool->params.type != POOL_TYPE_BTT)
 		memset((char *)off, 0, count);
 	else {
-		pool_btt_lseek(pool, (off_t)off, SEEK_SET);
+		if (pool_btt_lseek(pool, (off_t)off, SEEK_SET) == -1)
+			return -1;
+
 		size_t zero_size = min(count, RW_BUFFERING_SIZE);
 		void *buf = malloc(zero_size);
 		if (!buf) {
@@ -734,17 +855,17 @@ pool_set_files_count(struct pool_set_file *file)
  * pool_set_file_map_headers -- map headers of each pool set part file
  */
 int
-pool_set_file_map_headers(struct pool_set_file *file, int rdonly)
+pool_set_file_map_headers(struct pool_set_file *file, int rdonly, int prv)
 {
 	if (!file->poolset)
 		return -1;
 
-	int flags = rdonly ? MAP_PRIVATE : MAP_SHARED;
 	for (unsigned r = 0; r < file->poolset->nreplicas; r++) {
 		struct pool_replica *rep = file->poolset->replica[r];
 		for (unsigned p = 0; p < rep->nparts; p++) {
 			struct pool_set_part *part = &rep->part[p];
-			if (util_map_hdr(part, flags)) {
+			if (util_map_hdr(part,
+				prv ? MAP_PRIVATE : MAP_SHARED, rdonly)) {
 				part->hdr = NULL;
 				goto err;
 			}
@@ -842,6 +963,28 @@ pool_hdr_get_type(const struct pool_hdr *hdrp)
 		return POOL_TYPE_OBJ;
 	else
 		return POOL_TYPE_UNKNOWN;
+}
+
+/*
+ * pool_set_type -- get pool type of a poolset
+ */
+enum pool_type
+pool_set_type(struct pool_set *set)
+{
+	struct pool_hdr hdr;
+
+	/* open the first part file to read the pool header values */
+	const struct pool_set_part *part = &PART(REP(set, 0), 0);
+
+	if (util_file_pread(part->path, &hdr, sizeof(hdr), 0) !=
+			sizeof(hdr)) {
+		ERR("cannot read pool header from poolset");
+		return POOL_TYPE_UNKNOWN;
+	}
+
+	util_convert2h_hdr_nocheck(&hdr);
+	enum pool_type type = pool_hdr_get_type(&hdr);
+	return type;
 }
 
 /*

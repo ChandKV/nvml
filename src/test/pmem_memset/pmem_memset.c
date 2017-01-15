@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -64,7 +64,7 @@ main(int argc, char *argv[])
 	char *buf = MALLOC(bytes);
 
 	memset(dest, 0, bytes);
-	dest1 = malloc(bytes);
+	dest1 = MALLOC(bytes);
 	memset(dest1, 0, bytes);
 
 	/*
@@ -101,8 +101,9 @@ main(int argc, char *argv[])
 				argv[1], bytes / 2);
 	}
 
-	pmem_unmap(dest, mapped_len);
+	UT_ASSERTeq(pmem_unmap(dest, mapped_len), 0);
 
+	FREE(dest1);
 	FREE(buf);
 	CLOSE(fd);
 

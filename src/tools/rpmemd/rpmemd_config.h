@@ -57,6 +57,9 @@
 struct rpmemd_config {
 	char *log_file;
 	char *poolset_dir;
+	const char *rm_poolset;
+	bool force;
+	bool pool_set;
 	bool persist_apm;
 	bool persist_general;
 	bool use_syslog;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -44,6 +44,8 @@
 #include <sys/mman.h>
 #include <endian.h>
 #include "common.h"
+#include "set.h"
+#include "libpmem.h"
 #include "convert.h"
 
 static const char *help_str = "";
@@ -77,7 +79,30 @@ pmempool_convert_help(char *appname)
 	printf(help_str, appname);
 }
 
-typedef int (*convert_func)(void *addr);
+typedef int (*convert_func)(void *poolset, void *addr);
+
+/*
+ * convert_v2_v3 -- (internal) informs the user of the unfortunate fate of their
+ *	pools.
+ *
+ * The change introduced in the third major layout version impacts the internal
+ * alignment of user structures and as such, a generic conversion is not
+ * possible.
+ */
+static int
+convert_v2_v3(void *poolset, void *addr)
+{
+	printf("The conversion can only be made automatically if the\n"
+		"PMEMmutex, PMEMrwlock and PMEMcond types are not used in the\n"
+		"pool or all of the variables of those three types are aligned "
+		"to 8 bytes.\nProceed only if you are sure that the above is "
+		"true for this pool.\n");
+	if (ask_Yn('?', "convert the pool ?") == 'y') {
+		return 0;
+	}
+
+	return -1;
+}
 
 /*
  * Collection of pool converting functions. Each array index is used as a
@@ -86,7 +111,17 @@ typedef int (*convert_func)(void *addr);
 static convert_func version_convert[] = {
 	NULL, /* from version 0 to version 1 - does not exist */
 	convert_v1_v2, /* from v1 to v2 */
+	convert_v2_v3, /* from v2 to v3 */
 };
+
+/*
+ * pmempool_convert_persist -- calls the appropriate persist func for poolset
+ */
+void
+pmempool_convert_persist(void *poolset, const void *addr, size_t len)
+{
+	pool_set_file_persist(poolset, addr, len);
+}
 
 /*
  * pmempool_convert_func -- main function for convert command
@@ -103,21 +138,37 @@ pmempool_convert_func(char *appname, int argc, char *argv[])
 	int ret = 0;
 	const char *f = argv[1];
 
-	printf("This tool will update the pool to the latest available "
-		"layout version.\nThis process is NOT fail-safe.\n"
-		"Proceed only if the pool has been backed up or\n"
-		"the risks are fully understood and acceptable.\n");
-	if (ask_Yn('?', "convert the pool '%s' ?", f) != 'y') {
-		return 0;
-	}
-
-	struct pool_set_file *psf = pool_set_file_open(f, 0, 0);
-
-	if (psf == NULL) {
-		perror(f);
-
+	struct pmem_pool_params params;
+	if (pmem_pool_parse_params(f, &params, 1)) {
+		fprintf(stderr, "Cannot determine type of pool.\n");
 		return -1;
 	}
+
+	if (params.is_part) {
+		fprintf(stderr, "Conversion cannot be performed on "
+			"a poolset part.\n");
+		return -1;
+	}
+
+	if (params.type != PMEM_POOL_TYPE_OBJ) {
+		fprintf(stderr, "Conversion is currently supported only for "
+				"pmemobj pools.\n");
+		return -1;
+	}
+
+	struct pool_set_file *psf = pool_set_file_open(f, 0, 1);
+	if (psf == NULL) {
+		perror(f);
+		return -1;
+	}
+
+	if (psf->poolset->remote) {
+		fprintf(stderr, "Conversion of remotely replicated  pools is "
+			"currently not supported. Remove the replica first\n");
+		pool_set_file_close(psf);
+		return -1;
+	}
+
 	void *addr = pool_set_file_map(psf, 0);
 	if (addr == NULL) {
 		perror(f);
@@ -126,30 +177,79 @@ pmempool_convert_func(char *appname, int argc, char *argv[])
 	}
 
 	struct pool_hdr *phdr = addr;
-	if (memcmp(phdr->signature, OBJ_HDR_SIG, POOL_HDR_SIG_LEN) != 0) {
-		fprintf(stderr, "Conversion is currently supported only for"
-				"pmemobj pools\n");
-		ret = -1;
-		goto out;
-	}
-
 	uint32_t m = le32toh(phdr->major);
 	if (m >= COUNT_OF(version_convert) || !version_convert[m]) {
 		fprintf(stderr, "There's no conversion method for the pool.\n"
-				"Please make sure the pmempool utility"
+				"Please make sure the pmempool utility "
 				"is up-to-date.\n");
 		ret = -1;
 		goto out;
 	}
 
+	printf("This tool will update the pool to the latest available "
+		"layout version.\nThis process is NOT fail-safe.\n"
+		"Proceed only if the pool has been backed up or\n"
+		"the risks are fully understood and acceptable.\n");
+	if (ask_Yn('?', "convert the pool '%s' ?", f) != 'y') {
+		ret = 0;
+		goto out;
+	}
+
 	PMEMobjpool *pop = addr;
 
-	if (version_convert[m](pop) != 0)
-		fprintf(stderr, "Failed to convert the pool\n");
+	for (unsigned r = 0; r < psf->poolset->nreplicas; ++r) {
+		struct pool_replica *rep = psf->poolset->replica[r];
+		for (unsigned p = 0; p < rep->nparts; ++p) {
+			struct pool_set_part *part = &rep->part[p];
+			if (util_map_hdr(part, MAP_SHARED, 0) != 0) {
+				fprintf(stderr, "Failed to map headers.\n"
+						"Conversion did not start.\n");
+				ret = -1;
+				goto out;
+			}
+		}
+	}
 
-	msync(pop, psf->size, 0);
+	uint32_t i;
+	for (i = m; i < COUNT_OF(version_convert); ++i) {
+		if (version_convert[i](psf, pop) != 0) {
+			fprintf(stderr, "Failed to convert the pool\n");
+			break;
+		} else {
+			/* need to update every header of every part */
+			uint32_t target_m = i + 1;
+			for (unsigned r = 0; r < psf->poolset->nreplicas; ++r) {
+				struct pool_replica *rep =
+					psf->poolset->replica[r];
+				for (unsigned p = 0; p < rep->nparts; ++p) {
+					struct pool_set_part *part =
+						&rep->part[p];
+
+					struct pool_hdr *hdr = part->hdr;
+					hdr->major = htole32(target_m);
+					util_checksum(hdr, sizeof(*hdr),
+						&hdr->checksum, 1);
+					PERSIST_GENERIC_AUTO(hdr,
+						sizeof(struct pool_hdr));
+				}
+			}
+		}
+	}
+
+	if (i != m) /* at least one step has been performed */
+		printf("The pool has been converted to version %d\n.", i);
+
+	PERSIST_GENERIC_AUTO(pop, psf->size);
 
 out:
+	for (unsigned r = 0; r < psf->poolset->nreplicas; ++r) {
+		struct pool_replica *rep = psf->poolset->replica[r];
+		for (unsigned p = 0; p < rep->nparts; ++p) {
+			struct pool_set_part *part = &rep->part[p];
+			if (part->hdr != NULL)
+				util_unmap_hdr(part);
+		}
+	}
 	pool_set_file_close(psf);
 
 	return ret;

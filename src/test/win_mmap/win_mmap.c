@@ -223,6 +223,7 @@ test_mmap_len(int fd)
 			MAP_PRIVATE, fd, 0);
 	UT_ASSERTne(ptr, MAP_FAILED);
 	check_mapping(fd, ptr, FILE_SIZE, PROT_READ|PROT_WRITE, CHECK_PRIV, 0);
+	UT_ASSERTeq(munmap(ptr + FILE_SIZE, MMAP_SIZE), 0);
 
 	/* offset == 0 */
 	ptr = mmap(NULL, MMAP_SIZE, PROT_READ|PROT_WRITE,
@@ -257,6 +258,7 @@ test_mmap_len(int fd)
 	UT_ASSERTne(ptr, MAP_FAILED);
 	check_mapping(fd, ptr, FILE_SIZE - MMAP_SIZE, PROT_READ|PROT_WRITE,
 			CHECK_PRIV, MMAP_SIZE);
+	UT_ASSERTeq(munmap(ptr + FILE_SIZE - MMAP_SIZE, MMAP_SIZE), 0);
 
 	/* offset beyond file_size */
 	ptr = mmap(NULL, MMAP_SIZE, PROT_READ, MAP_SHARED, fd,
@@ -611,6 +613,7 @@ test_msync(int fd)
 #ifndef _WIN32
 	/* ... but it is allowed on Linux */
 	UT_ASSERTeq(msync(ptr1, MMAP_SIZE, 0), 0);
+	UT_ASSERTeq(errno, 0);
 #else
 	UT_ASSERTne(msync(ptr1, MMAP_SIZE, 0), 0);
 	UT_ASSERTeq(errno, EINVAL);
@@ -621,8 +624,14 @@ test_msync(int fd)
 
 	/* len == SIZE_MAX - should fail */
 	errno = 0;
+#ifndef _WIN32
+	/* ... but it is allowed on Linux */
+	UT_ASSERTeq(msync(ptr1, SIZE_MAX, MS_SYNC), 0);
+	UT_ASSERTeq(errno, 0);
+#else
 	UT_ASSERTne(msync(ptr1, SIZE_MAX, MS_SYNC), 0);
 	UT_ASSERTeq(errno, ENOMEM);
+#endif
 
 	/* unaligned pointer - should fail */
 	errno = 0;
@@ -635,15 +644,11 @@ test_msync(int fd)
 	/* unaligned length - should succeed */
 	UT_ASSERTeq(msync(ptr1, FILE_SIZE - 100, MS_SYNC), 0);
 
-	/* len > file_size - should fail */
+	/* len > mapping size - should fail */
+	UT_ASSERTeq(munmap(ptr1 + FILE_SIZE / 2, FILE_SIZE / 2), 0);
 	errno = 0;
-#ifndef _WIN32
-	/* ... but for some reason it works on Linux */
-	UT_ASSERTeq(msync(ptr1, FILE_SIZE + MMAP_SIZE, MS_SYNC), 0);
-#else
-	UT_ASSERTne(msync(ptr1, FILE_SIZE + MMAP_SIZE, MS_SYNC), 0);
+	UT_ASSERTne(msync(ptr1, FILE_SIZE, MS_SYNC), 0);
 	UT_ASSERTeq(errno, ENOMEM);
-#endif
 
 	/* partial sync */
 	UT_ASSERTeq(msync(ptr1 + PAGE_SIZE, MMAP_SIZE, MS_SYNC), 0);
@@ -669,6 +674,13 @@ test_msync(int fd)
 	UT_ASSERTeq(ptr2, ptr1 + MMAP_SIZE * 2);
 	UT_ASSERTeq(msync(ptr1 + MMAP_SIZE, MMAP_SIZE * 2, MS_SYNC), 0);
 	UT_ASSERTeq(munmap(ptr1, MMAP_SIZE * 4), 0);
+
+	/* anonymous mapping */
+	ptr1 = mmap(NULL, FILE_SIZE, PROT_READ|PROT_WRITE,
+			MAP_SHARED|MAP_ANON, -1, 0);
+	UT_ASSERTne(ptr1, MAP_FAILED);
+	UT_ASSERTeq(msync(ptr1, FILE_SIZE, MS_SYNC), 0);
+	UT_ASSERTeq(munmap(ptr1, FILE_SIZE), 0);
 }
 
 #define PROT_ALL (PROT_READ|PROT_WRITE|PROT_EXEC)
@@ -696,14 +708,13 @@ test_mprotect(int fd, int fd_ro)
 	check_access(ptr1, MMAP_SIZE, PROT_READ|PROT_WRITE);
 	UT_ASSERTeq(munmap(ptr1, MMAP_SIZE), 0);
 
-	/* len == SIZE_MAX - should fail */
+	/* len > mapping size - should fail */
 	ptr1 = mmap(NULL, MMAP_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-	UT_ASSERTne(ptr1, MAP_FAILED);
+	UT_ASSERTeq(munmap(ptr1 + FILE_SIZE / 2, FILE_SIZE / 2), 0);
 	errno = 0;
-	UT_ASSERTne(mprotect(ptr1, SIZE_MAX, PROT_READ), 0);
+	UT_ASSERTne(mprotect(ptr1, FILE_SIZE, PROT_READ), 0);
 	UT_ASSERTeq(errno, ENOMEM);
-	check_access(ptr1, MMAP_SIZE, PROT_READ);
-	UT_ASSERTeq(munmap(ptr1, MMAP_SIZE), 0);
+	UT_ASSERTeq(munmap(ptr1, FILE_SIZE), 0);
 
 	/* change protection: R/O => R/W */
 	ptr1 = mmap(NULL, MMAP_SIZE, PROT_READ, MAP_SHARED, fd, 0);
@@ -809,6 +820,7 @@ test_mprotect(int fd, int fd_ro)
 	errno = 0;
 	UT_ASSERTne(mprotect(ptr1, MMAP_SIZE, PROT_READ|PROT_WRITE), 0);
 	UT_ASSERTeq(errno, EACCES);
+	UT_ASSERTeq(munmap(ptr1, MMAP_SIZE), 0);
 }
 
 /*

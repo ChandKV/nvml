@@ -14,21 +14,47 @@
 # on a PMEM-aware file system here.  Comment this line out if there's no
 # actual persistent memory available on this system.
 #
-#$PMEM_FS_DIR = '\mnt\pmem'
+#$Env:PMEM_FS_DIR = "\mnt\pmem"
 
 #
 # For tests that require true a non-persitent memory aware file system (i.e.
 # to verify something works on traditional page-cache based memory-mapped
 # files) set the path to a directory on a normal file system here.
 #
-$NON_PMEM_FS_DIR = '\temp'
+$Env:NON_PMEM_FS_DIR = "\temp"
 
 #
 # If you don't have real PMEM or PMEM emulation set up, but still want to test
 # PMEM codepaths uncomment this line. It will set PMEM_IS_PMEM_FORCE to 1 for
 # tests that require pmem.
 #
-#$PMEM_FS_DIR_FORCE_PMEM = 1
+#$Env:PMEM_FS_DIR_FORCE_PMEM = "1"
+
+#
+# Overwrite default test type:
+# check (default), short, medium, long, all
+# where: check = short + medium; all = short + medium + long
+#
+#$Env:TEST_TYPE = "check"
+
+#
+# Overwrite available build types:
+# debug, nondebug, static-debug, static-nondebug, all (default)
+#
+#$Env:TEST_BUILD = "all"
+
+#
+# Overwrite available filesystem types:
+# pmem, non-pmem, any, none, all (default)
+#
+#$Env:TEST_FS = "all"
+
+#
+# Overwrite default timeout
+# (floating point number with an optional suffix: 's' for seconds (the default),
+# 'm' for minutes, 'h' for hours or 'd' for days)
+#
+#$Env:TEST_TIMEOUT = "60s"
 
 #
 # 2) *** REMOTE CONFIGURATION ***

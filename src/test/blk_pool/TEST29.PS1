@@ -1,5 +1,5 @@
 #
-# Copyright 2015-2016, Intel Corporation
+# Copyright 2015-2017, Intel Corporation
 # Copyright (c) 2016, Microsoft Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -43,14 +43,12 @@ Param(
 
 $Env:UNITTEST_NAME = "blk_pool\TEST29"
 $Env:UNITTEST_NUM = "29"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 # standard unit test setup
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 setup
 
@@ -58,8 +56,6 @@ setup
 # TEST29 existing file, file size >= min required size, bsize == 300
 #        (pool set)
 #
-
-# XXX - implement support for providing size with K/M/G units
 
 create_poolset $DIR\testset 20M:$DIR\testfile1 20M:$DIR\testfile2
 

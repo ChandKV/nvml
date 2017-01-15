@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,13 +39,11 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_create\TEST3"
 $Env:UNITTEST_NUM = "3"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
@@ -55,11 +53,11 @@ $POOL="$DIR\file.pool"
 $INHERIT="$DIR\inherit.pool"
 
 # PMEMBLK
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create blk 512 $POOL
+expect_normal_exit $PMEMPOOL create blk 512 $POOL
 check_file $POOL
 check_signature PMEMBLK $POOL
 sv -Name SIZE -Scope "Local" (get_size $POOL)
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create --inherit $POOL $INHERIT
+expect_normal_exit $PMEMPOOL create --inherit $POOL $INHERIT
 check_file $INHERIT
 check_signature PMEMBLK $INHERIT
 check_size $SIZE $INHERIT
@@ -67,11 +65,11 @@ check_size $SIZE $INHERIT
 # PMEMLOG
 rm $POOL
 rm $INHERIT
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create log $POOL
+expect_normal_exit $PMEMPOOL create log $POOL
 check_file $POOL
 check_signature PMEMLOG $POOL
 sv -Name SIZE -Scope "Local" (get_size $POOL)
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create --inherit $POOL $INHERIT
+expect_normal_exit $PMEMPOOL create --inherit $POOL $INHERIT
 check_file $INHERIT
 check_signature PMEMLOG $INHERIT
 check_size $SIZE $INHERIT
@@ -79,12 +77,12 @@ check_size $SIZE $INHERIT
 # PMEMOBJ
 rm $POOL
 rm $INHERIT
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create --layout=LAYOUT_NAME obj $POOL
+expect_normal_exit $PMEMPOOL create --layout=LAYOUT_NAME obj $POOL
 check_file $POOL
 check_signature PMEMOBJ $POOL
 check_layout LAYOUT_NAME $POOL
 sv -Name SIZE -Scope "Local" (get_size $POOL)
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create --inherit $POOL $INHERIT
+expect_normal_exit $PMEMPOOL create --inherit $POOL $INHERIT
 check_file $INHERIT
 check_signature PMEMOBJ $INHERIT
 check_layout LAYOUT_NAME $POOL

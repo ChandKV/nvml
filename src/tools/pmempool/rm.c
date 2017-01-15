@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,11 +41,17 @@
 #include <stdio.h>
 #include <fcntl.h>
 
+#include "out.h"
 #include "common.h"
 #include "output.h"
+#include "file.h"
 #include "rm.h"
-
 #include "set.h"
+
+#ifdef USE_RPMEM
+#include "rpmem_common.h"
+#include "rpmem_ssh.h"
+#endif
 
 enum ask_type {
 	ASK_SOMETIMES,	/* ask before removing write-protected files */
@@ -128,30 +134,107 @@ rm_file(const char *file)
 
 	const char *pre_msg = write_protected ? "write-protected " : "";
 	if (ask_Yn(cask, "remove %sfile '%s' ?", pre_msg, file) == 'y') {
-		if (unlink(file))
+		if (util_unlink(file))
 			err(1, "cannot remove file '%s'", file);
 		outv(1, "removed '%s'\n", file);
 	}
 }
 
+/*
+ * remove_remote -- (internal) remove remote pool
+ */
 static int
-rm_poolset_cb(const char *part_file, void *arg)
+remove_remote(const char *target, const char *pool_set)
 {
-	outv(2, "part file   : %s\n", part_file);
-
-	int exists = access(part_file, F_OK) == 0;
-	if (!exists) {
-		/*
-		 * Ignore not accessible file if force
-		 * flag is set
-		 */
-		if (force)
-			return 0;
-
-		err(1, "cannot remove file '%s'", part_file);
+#ifdef USE_RPMEM
+	char cask = 'y';
+	switch (ask_mode) {
+	case ASK_ALWAYS:
+		cask = '?';
+		break;
+	case ASK_NEVER:
+	case ASK_SOMETIMES:
+		cask = 'y';
+		break;
 	}
 
-	rm_file(part_file);
+	if (ask_Yn(cask, "remove remote pool '%s' on '%s'?",
+		pool_set, target) != 'y')
+		return 0;
+
+	struct rpmem_target_info *info = rpmem_target_parse(target);
+	if (!info)
+		goto err_parse;
+
+	struct rpmem_ssh *ssh;
+
+	if (force) {
+		ssh = rpmem_ssh_exec(info, "--remove",
+				pool_set, "--force", NULL);
+	} else {
+		ssh = rpmem_ssh_exec(info, "--remove",
+				pool_set, NULL);
+	}
+
+	if (!ssh)
+		goto err_ssh_exec;
+
+	int ret = 0;
+
+	if (rpmem_ssh_monitor(ssh, 0))
+		ret = 1;
+
+	if (rpmem_ssh_close(ssh))
+		ret = 1;
+
+	if (ret)
+		goto err_ssh_exec;
+
+	rpmem_target_free(info);
+
+	outv(1, "removed '%s' on '%s'\n",
+			pool_set, target);
+
+	return ret;
+err_ssh_exec:
+	rpmem_target_free(info);
+err_parse:
+	if (!force)
+		outv_err("cannot remove '%s' on '%s'", pool_set, target);
+	return 1;
+#else
+	outv_err("remote replication not supported");
+	return 1;
+#endif
+}
+
+/*
+ * rm_poolset_cb -- (internal) callback for removing replicas
+ */
+static int
+rm_poolset_cb(struct part_file *pf, void *arg)
+{
+	if (pf->is_remote) {
+		return remove_remote(pf->node_addr, pf->pool_desc);
+	} else {
+		const char *part_file = pf->path;
+
+		outv(2, "part file   : %s\n", part_file);
+
+		int exists = access(part_file, F_OK) == 0;
+		if (!exists) {
+			/*
+			 * Ignore not accessible file if force
+			 * flag is set
+			 */
+			if (force)
+				return 0;
+
+			err(1, "cannot remove file '%s'", part_file);
+		}
+
+		rm_file(part_file);
+	}
 
 	return 0;
 }
@@ -164,8 +247,13 @@ rm_poolset(const char *file)
 {
 	int ret = util_poolset_foreach_part(file, rm_poolset_cb, NULL);
 	if (ret) {
+		if (ret == -1) {
+			outv_err("parsing poolset failed: %s\n",
+					out_get_errormsg());
+			exit(1);
+		}
 		if (!force) {
-			outv_err("cannot parse poolset file '%s'\n", file);
+			outv_err("removing '%s' failed\n", file);
 			exit(1);
 		}
 		return;
@@ -222,7 +310,7 @@ pmempool_rm_func(char *appname, int argc, char *argv[])
 			err(1, "cannot remove '%s'", file);
 		}
 
-		int is_poolset = util_is_poolset(file);
+		int is_poolset = util_is_poolset_file(file) == 1;
 
 		if (is_poolset)
 			outv(2, "poolset file: %s\n", file);

@@ -66,12 +66,13 @@ enum rpmemd_option {
 	RPD_OPT_PERSIST_GENERAL,
 	RPD_OPT_USE_SYSLOG,
 	RPD_OPT_LOG_LEVEL,
+	RPD_OPT_RM_POOLSET,
 
 	RPD_OPT_MAX_VALUE,
 	RPD_OPT_INVALID			= UINT64_MAX,
 };
 
-static const char *optstr = "c:hV";
+static const char *optstr = "c:hVr:fs";
 
 /*
  * options -- cl and config file options
@@ -86,7 +87,10 @@ static const struct option options[] = {
 {"persist-general",	no_argument,		0, RPD_OPT_PERSIST_GENERAL},
 {"use-syslog",		no_argument,		0, RPD_OPT_USE_SYSLOG},
 {"log-level",		required_argument,	0, RPD_OPT_LOG_LEVEL},
-{0,			0,			0, 0},
+{"remove",		required_argument,	0, 'r'},
+{"force",		no_argument,		0, 'f'},
+{"pool-set",		no_argument,		0, 's'},
+{0,			0,			0,  0},
 };
 
 #define VALUE_INDENT	"                                        "
@@ -95,7 +99,8 @@ static const char *help_str =
 "\n"
 "Options:\n"
 "  -c, --config <path>           configuration file location\n"
-"  -f, --foreground              run in foreground - do not run as a daemon\n"
+"  -r, --remove <poolset>        remove pool described by given poolset file\n"
+"  -f, --force                   ignore errors when removing a pool\n"
 "  -h, --help                    display help message and exit\n"
 "  -V, --version                 display target daemon version and exit\n"
 "      --log-file <path>         log file location\n"
@@ -446,6 +451,15 @@ parse_cl_args(int argc, char *argv[], struct rpmemd_config *config,
 		case 'c':
 			(*config_file) = optarg;
 			break;
+		case 'r':
+			config->rm_poolset = optarg;
+			break;
+		case 'f':
+			config->force = true;
+			break;
+		case 's':
+			config->pool_set = true;
+			break;
 		case 'h':
 			print_help(argv[0]);
 			exit(0);
@@ -561,6 +575,8 @@ config_set_default(struct rpmemd_config *config, const char *poolset_dir)
 	config->use_syslog	= true;
 	config->max_lanes	= RPMEM_DEFAULT_MAX_LANES;
 	config->log_level	= RPD_LOG_ERR;
+	config->rm_poolset	= NULL;
+	config->force		= false;
 }
 
 /*

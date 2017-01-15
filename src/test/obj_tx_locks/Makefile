@@ -40,3 +40,7 @@ LIBPMEM=y
 LIBPMEMOBJ=y
 
 include ../Makefile.inc
+
+# one of the functions tests that deprecated functionality still works
+# so we have to disable this warning to let it compile with -Werror
+CFLAGS += -Wno-deprecated-declarations

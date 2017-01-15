@@ -39,9 +39,11 @@ MKDIR = mkdir
 INSTALL = install
 CP = cp
 CSTYLE = $(TOP)/utils/cstyle
+CSTYLEON = 0
 STYLE_CHECK = $(TOP)/utils/style_check.sh
 PKG_CONFIG = pkg-config
 CLANG_FORMAT ?= clang-format
+HEADERS = $(wildcard *.h) $(wildcard *.hpp)
 
 ifeq ($(shell command -v $(PKG_CONFIG) && echo y || echo n), n)
 $(error $(PKG_CONFIG) not found)
@@ -90,6 +92,14 @@ define create-deps
 	$(RM) -f $(objdir)/$*.d
 endef
 
+check_defined = \
+    $(strip $(foreach 1,$1, \
+        $(call __check_defined,$1,$(strip $(value 2)))))
+
+__check_defined = \
+    $(if $(value $1),, \
+      $(error Undefined $1$(if $2, ($2))))
+
 export prefix = /usr/local
 export exec_prefix := $(prefix)
 export sysconfdir := $(prefix)/etc
@@ -120,6 +130,19 @@ cstyle: cstyle-check
 
 format: cstyle-format
 
+ifeq ($(CSTYLEON),1)
+define check-cstyle
+	@$(STYLE_CHECK) check $1 && if [ "$2" != "" ]; then mkdir -p `dirname $2` && touch $2; fi
+endef
+else ifeq ($(CSTYLEON),2)
+define check-cstyle
+	@$(STYLE_CHECK) check $1 && if [ "$2" != "" ]; then mkdir -p `dirname $2` && touch $2; fi || true
+endef
+else
+define check-cstyle
+endef
+endif
+
 define sub-target-foreach
 $(1)-$(2):
 	$$(MAKE) -C $1 $2
@@ -140,10 +163,44 @@ endif
 
 INC_PREFIX ?= include
 
+test_build=$(addprefix "-b ", $(TEST_BUILD))
+test_type=$(addprefix " -t ", $(TEST_TYPE))
+test_fs=$(addprefix " -f ", $(TEST_FS))
+test_time=$(addprefix " -o ", $(TEST_TIME))
+test_memcheck=$(addprefix " -m ", $(MEMCHECK))
+test_pmemcheck=$(addprefix " -p ", $(PMEMCHECK))
+test_helgrind=$(addprefix " -e ", $(HELGRIND))
+test_drd=$(addprefix " -d ", $(DRD))
+test_providers=$(addprefix " -q ", $(TEST_PROVIDERS))
+test_pmethods=$(addprefix " -r ", $(TEST_PMETHODS))
+
+ifeq ($(CHECK_POOL),y)
+test_check_pool=" -c "
+endif
+
+RUNTEST_OPTIONS := "$(test_build)$(test_type)$(test_fs)$(test_time)"
+RUNTEST_OPTIONS += "$(test_memcheck)$(test_pmemcheck)$(test_helgrind)$(test_drd)"
+RUNTEST_OPTIONS += "$(test_providers)$(test_pmethods)$(test_check_pool)"
+
 export libdir := $(exec_prefix)/$(LIB_PREFIX)
 export includedir := $(prefix)/$(INC_PREFIX)
 export pkgconfigdir := $(libdir)/pkgconfig
 export bindir := $(exec_prefix)/bin
 export bashcompdir := $(sysconfdir)/bash_completion.d
 
-export BUILD_RPMEM := $(call check_package, libfabric)
+check_ibv_fork_init = $(shell echo "\#include <infiniband/verbs.h> int main(void) { return ibv_fork_init(); }" |\
+	$(CC) -c $(CFLAGS) -x c -o /dev/null -libverbs - 2>/dev/null && echo y || echo n)
+
+export HAS_LIBFABRIC := $(call check_package, libfabric)
+
+ifeq ($(HAS_LIBFABRIC),y)
+ifeq ($(RPMEM_DISABLE_LIBIBVERBS),y)
+export HAS_LIBIBVERBS := n
+export BUILD_RPMEM := y
+else
+export HAS_LIBIBVERBS := $(call check_ibv_fork_init)
+export BUILD_RPMEM := $(HAS_LIBIBVERBS)
+endif
+else
+export BUILD_RPMEM := n
+endif

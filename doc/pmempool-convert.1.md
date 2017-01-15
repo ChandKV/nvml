@@ -3,7 +3,7 @@ layout: manual
 Content-Style: 'text/css'
 title: pmempool-convert(1)
 header: NVM Library
-date: pmem Tools version 1.0.1
+date: pmem Tools version 1.2.0
 ...
 
 [comment]: <> (Copyright 2016, Intel Corporation)
@@ -79,5 +79,5 @@ Updates pool.obj to the latest layout version.
 
 # SEE ALSO #
 
-**pmempool**(1), **libpmemlog**(3), **libpmemblk**(3), **libpmemobj**(3)
-and **<http://pmem.io>**
+**pmempool**(1), **libpmempool**(3), **libpmemlog**(3), **libpmemblk**(3),
+**libpmemobj**(3) and **<http://pmem.io>**

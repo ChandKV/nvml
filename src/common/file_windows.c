@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -53,7 +53,6 @@
 #include <windows.h>
 #include <sys/stat.h> // XXX
 #include <sys/file.h> // XXX
-#include <Shlwapi.h>
 
 #include "file.h"
 #include "out.h"
@@ -81,14 +80,18 @@ util_tmpfile(const char *dir, const char *templ)
 	 */
 
 	fd = mkstemp(fullname);
-
 	if (fd < 0) {
 		ERR("!mkstemp");
 		goto err;
 	}
 
-	(void) unlink(fullname);
-	LOG(3, "unlinked file is \"%s\"", fullname);
+	/*
+	 * There is no point to use unlink() here.  First, because it does not
+	 * work on open files.  Second, because the file is created with
+	 * O_TEMPORARY flag, and it looks like such temp files cannot be open
+	 * from another process, even though they are visible on
+	 * the filesystem.
+	 */
 
 	return fd;
 
@@ -101,15 +104,87 @@ err:
 }
 
 /*
- * util_is_absolute_path -- check if the path is an absolute one
+ * util_is_absolute_path -- check if the path is absolute
  */
 int
 util_is_absolute_path(const char *path)
 {
 	LOG(3, "path: %s", path);
 
-	if (PathIsRelativeA(path))
+	if (path == NULL || path[0] == '\0')
 		return 0;
-	else
+
+	if (path[0] == '\\' || path[1] == ':')
 		return 1;
+
+	return 0;
+}
+
+/*
+ * util_file_mkdir -- creates new dir
+ */
+int
+util_file_mkdir(const char *path, mode_t mode)
+{
+	/*
+	 * On windows we cannot create read only dir so mode
+	 * parameter is useless.
+	 */
+	UNREFERENCED_PARAMETER(mode);
+	LOG(3, "path: %s mode: %d", path, mode);
+	return _mkdir(path);
+}
+
+/*
+ * util_file_dir_open -- open a directory
+ */
+int
+util_file_dir_open(struct dir_handle *handle, const char *path)
+{
+	/* init handle */
+	handle->handle = NULL;
+	handle->path = path;
+	return 0;
+}
+
+/*
+ * util_file_dir_next - read next file in directory
+ */
+int
+util_file_dir_next(struct dir_handle *handle, struct file_info *info)
+{
+	WIN32_FIND_DATAA data;
+	if (handle->handle == NULL) {
+		handle->handle = FindFirstFileA(handle->path, &data);
+		if (handle->handle == NULL)
+			return FALSE;
+
+	} else {
+		if (FindNextFileA(handle->handle, &data) == 0) {
+			return FALSE;
+		}
+
+	}
+	strcat(info->filename, data.cFileName);
+	info->is_dir = data.dwFileAttributes ==	FILE_ATTRIBUTE_DIRECTORY;
+
+	return TRUE;
+}
+
+/*
+ * util_file_dir_close -- close a directory
+ */
+int
+util_file_dir_close(struct dir_handle *handle)
+{
+	return FindClose(handle->handle);
+}
+
+/*
+ * util_file_dir_close -- remove directory
+ */
+int
+util_file_dir_remove(const char *path)
+{
+	return RemoveDirectoryA(path) == 0 ? -1 : 0;
 }

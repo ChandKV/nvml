@@ -3,7 +3,7 @@ layout: manual
 Content-Style: 'text/css'
 title: libpmem(3)
 header: NVM Library
-date: pmem API version 1.0.2
+date: pmem API version 1.0.3
 ...
 
 [comment]: <> (Copyright 2016, Intel Corporation)
@@ -266,6 +266,11 @@ If creation flags are not supplied, then **pmem_map_file**() creates a
 mapping for an existing file. In such case, *len* should be zero. The
 entire file is mapped to memory; its length is used as the length of the
 mapping and returned via *mapped_lenp*.
+
+The path of a file can point to a Device DAX and in such case only
+**PMEM_FILE_CREATE** and **PMEM_FILE_SPARSE** flags are valid, but they both
+effectively do nothing. For Device DAX mappings, the *len* argument must be,
+regardless of the flags, equal to either 0 or the exact size of the device.
 
 To delete mappings created with **pmem_map_file**(), use **pmem_unmap**().
 
@@ -549,6 +554,12 @@ the **CLFLUSHOPT** instruction on Intel hardware, falling back to the
 processor caches on platforms that support the instruction, but where
 **CLWB** is not available. This variable is intended for use during
 library testing.
+
++ **PMEM_NO_FLUSH**=1
+
+Setting this environment variable to 1 forces **libpmem** to never issue
+any of **CLFLUSH**, **CLFLUSHOPT** or **CLWB** instructions on Intel hardware.
+This variable is intended for use during library testing.
 
 + **PMEM_NO_MOVNT**=1
 

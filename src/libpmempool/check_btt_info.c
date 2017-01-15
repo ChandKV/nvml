@@ -292,7 +292,7 @@ btt_info_gen_fix(PMEMpoolcheck *ppc, struct check_step_data *location,
 		/* other parameters can be calculated */
 		if (btt_info_set(bttd, btts->external_lbasize, btts->nfree,
 				arena_size, space_left)) {
-			CHECK_ERR(ppc, "Can not restore BTT Info");
+			CHECK_ERR(ppc, "can not restore BTT Info");
 			return -1;
 		}
 
@@ -331,9 +331,10 @@ btt_info_checksum_retry(PMEMpoolcheck *ppc, union location *loc)
 	}
 
 	if (CHECK_IS_NOT(ppc, ADVANCED)) {
+		ppc->result = CHECK_RESULT_CANNOT_REPAIR;
+		CHECK_INFO(ppc, REQUIRE_ADVANCED);
 		CHECK_ERR(ppc, "arena %u: BTT Info header checksum incorrect",
 			loc->arena->id);
-		ppc->result = CHECK_RESULT_NOT_CONSISTENT;
 		check_end(ppc->data);
 		goto error_cleanup;
 	}
@@ -473,6 +474,7 @@ static const struct step steps[] = {
 	},
 	{
 		.check		= NULL,
+		.fix		= NULL,
 	},
 };
 
@@ -482,6 +484,8 @@ static const struct step steps[] = {
 static inline int
 step_exe(PMEMpoolcheck *ppc, union location *loc)
 {
+	ASSERT(loc->step < ARRAY_SIZE(steps));
+
 	const struct step *step = &steps[loc->step++];
 
 	if (!step->fix)
@@ -537,7 +541,6 @@ check_btt_info(PMEMpoolcheck *ppc)
 		/* jump to next offset */
 		if (ppc->result != CHECK_RESULT_PROCESS_ANSWERS) {
 			loc->offset += nextoff;
-			nextoff = 0;
 			loc->step = 0;
 			loc->valid.btti_header = 0;
 			loc->valid.btti_backup = 0;

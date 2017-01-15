@@ -80,15 +80,23 @@ all test: $(TARGET)
 $(TARGET): $(OBJS)
 	$(AR) rv $@ $(OBJS)
 
+ifneq ($(CSTYLEON),0)
+$(TARGET): unittest.htmp
+endif
+
 objdir=.
 
 .c.o:
+	$(call check-cstyle, $<)
 	@mkdir -p .deps
 	$(CC) -MD -c $(CFLAGS) $(INCS) $(COMMONINCS) $< -o $@
 	$(create-deps)
 
+%.htmp: %.h
+	$(call check-cstyle, $<, $@)
+
 clean:
-	$(RM) *.o core a.out
+	$(RM) *.o core a.out unittest.htmp
 
 clobber: clean
 	$(RM) $(TARGET)

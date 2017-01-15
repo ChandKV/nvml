@@ -33,8 +33,12 @@
 #ifndef EXAMPLES_CTREE_MAP_VOLATILE_HPP
 #define EXAMPLES_CTREE_MAP_VOLATILE_HPP
 #include <cstdint>
+#include <ex_common.h>
 #include <functional>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define BIT_IS_SET(n, i) (!!((n) & (1ULL << (i))))
 
@@ -206,7 +210,7 @@ public:
 	 * @return 0 on
 	 */
 	int
-	lookup(key_type key)
+	lookup(key_type key) const
 	{
 		return get(key) != nullptr;
 	}
@@ -233,7 +237,7 @@ public:
 	 * @return 1 if empty, 0 otherwise.
 	 */
 	int
-	is_empty()
+	is_empty() const
 	{
 		return root->value == nullptr && root->inode == nullptr;
 	}
@@ -244,7 +248,7 @@ public:
 	 * @return 0 on success, negative values on error.
 	 */
 	int
-	check()
+	check() const
 	{
 		return 0;
 	}
@@ -328,7 +332,7 @@ private:
 	static int
 	find_crit_bit(key_type lhs, key_type rhs)
 	{
-		return 64 - __builtin_clzll(lhs ^ rhs) - 1;
+		return fls(lhs ^ rhs);
 	}
 
 	/*

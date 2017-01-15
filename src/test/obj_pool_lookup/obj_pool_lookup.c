@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -51,6 +51,12 @@ main(int argc, char *argv[])
 	int npools = atoi(argv[2]);
 	const char *dir = argv[1];
 	int r;
+
+	/* check before pool creation */
+	PMEMoid some_oid = {2, 3};
+
+	UT_ASSERTeq(pmemobj_pool_by_ptr(&some_oid), NULL);
+	UT_ASSERTeq(pmemobj_pool_by_oid(some_oid), NULL);
 
 	PMEMobjpool **pops = MALLOC(npools * sizeof(PMEMobjpool *));
 	void **guard_after = MALLOC(npools * sizeof(void *));

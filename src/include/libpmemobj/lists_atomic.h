@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -73,7 +73,7 @@ D_RO((head)->pe_first)->field.pe_prev)
 #define POBJ_LIST_DEST_TAIL	0
 
 #define POBJ_LIST_FOREACH(var, head, field)\
-for (_POBJ_DEBUG_NOTICE_IN_TX_FOR("POBJ_LIST_FOREACH")\
+for (_pobj_debug_notice("POBJ_LIST_FOREACH", __FILE__, __LINE__),\
 	(var) = POBJ_LIST_FIRST((head));\
 	TOID_IS_NULL((var)) == 0;\
 	TOID_EQUALS(POBJ_LIST_NEXT((var), field),\
@@ -82,7 +82,7 @@ for (_POBJ_DEBUG_NOTICE_IN_TX_FOR("POBJ_LIST_FOREACH")\
 	((var) = POBJ_LIST_NEXT((var), field)))
 
 #define POBJ_LIST_FOREACH_REVERSE(var, head, field)\
-for (_POBJ_DEBUG_NOTICE_IN_TX_FOR("POBJ_LIST_FOREACH_REVERSE")\
+for (_pobj_debug_notice("POBJ_LIST_FOREACH_REVERSE", __FILE__, __LINE__),\
 	(var) = POBJ_LIST_LAST((head), field);\
 	TOID_IS_NULL((var)) == 0;\
 	TOID_EQUALS(POBJ_LIST_PREV((var), field),\

@@ -3,10 +3,10 @@ layout: manual
 Content-Style: 'text/css'
 title: libpmemblk(3)
 header: NVM Library
-date: pmemblk API version 1.0.4
+date: pmemblk API version 1.0.6
 ...
 
-[comment]: <> (Copyright 2016, Intel Corporation)
+[comment]: <> (Copyright 2016-2017, Intel Corporation)
 
 [comment]: <> (Redistribution and use in source and binary forms, with or without)
 [comment]: <> (modification, are permitted provided that the following conditions)
@@ -56,7 +56,7 @@ date: pmemblk API version 1.0.4
 # SYNOPSIS #
 
 ```c
-#include <ibpmemblk.h>
+#include <libpmemblk.h>
 cc ... -lpmemblk -lpmem
 ```
 
@@ -226,6 +226,16 @@ or the Metric Interchange Format. Standards accept SI units with obligatory
 B - kB, MB, GB, ... (multiplier by 1000) and IEC units with optional "iB"
 - KiB, MiB, GiB, ..., K, M, G, ... - (multiplier by 1024).
 
+The path of a part can point to a Device DAX and in such case the size
+argument can be set to an "AUTO" string, which means that the size of the device
+will be automatically resolved at pool creation time. When using Device DAX
+there's also one additional restriction, that a pool set can consist only of a
+single part.
+
+Device DAX is the device-centric analogue of Filesystem DAX. It allows memory
+ranges to be allocated and mapped without need of an intervening file system.
+For more information please see **ndctl-create-namespace**(1).
+
 The minimum file size of each part of the pool set is the same as the minimum size
 allowed for a block pool consisting of one file. It is defined in **\<libpmemblk.h\>**
 as **PMEMBLK_MIN_POOL**. Lines starting with "#" character are ignored.
@@ -356,39 +366,39 @@ The library does not make heavy use of the system malloc functions, but it does 
 int pmemblk_check(const char *path, size_t bsize);
 ```
 
-The **pmemblk_check**() function performs a consistency check of the file indicated by *path* and returns 1 if the memory pool is found to be consistent. Any 
-inconsistencies found will cause **pmemblk_check**() to return 0, in which case the use of the file with **libpmemblk** will result in undefined behavior. The 
-debug version of **libpmemblk** will provide additional details on inconsistencies when **PMEMBLK_LOG_LEVEL** is at least 1, as described in the **DEBUGGING AND 
-ERROR HANDLING** section below. When *bsize* is non-zero **pmemblk_check**() will compare it to the block size of the pool and return 0 when they don't 
-match. **pmemblk_check**() will return -1 and set *errno* if it cannot perform the consistency check due to other errors. **pmemblk_check**() opens the given 
-*path* read-only so it never makes any changes to the file.
+The **pmemblk_check**() function performs a consistency check of the file indicated by *path* and returns 1 if the memory pool is found to be consistent. Any
+inconsistencies found will cause **pmemblk_check**() to return 0, in which case the use of the file with **libpmemblk** will result in undefined behavior. The
+debug version of **libpmemblk** will provide additional details on inconsistencies when **PMEMBLK_LOG_LEVEL** is at least 1, as described in the **DEBUGGING AND
+ERROR HANDLING** section below. When *bsize* is non-zero **pmemblk_check**() will compare it to the block size of the pool and return 0 when they don't
+match. **pmemblk_check**() will return -1 and set *errno* if it cannot perform the consistency check due to other errors. **pmemblk_check**() opens the given
+*path* read-only so it never makes any changes to the file. This function is not supported on Device DAX.
 
 
 # DEBUGGING AND ERROR HANDLING #
 
-Two versions of **libpmemblk** are typically available on a development system. The normal version, accessed when a program is linked using the **-lpmemblk** 
-option, is optimized for performance. That version skips checks that impact performance and never logs any trace information or performs any run-time 
-assertions. If an error is detected during the call to **libpmemblk** function, an application may retrieve an error message describing the reason of failure 
+Two versions of **libpmemblk** are typically available on a development system. The normal version, accessed when a program is linked using the **-lpmemblk**
+option, is optimized for performance. That version skips checks that impact performance and never logs any trace information or performs any run-time
+assertions. If an error is detected during the call to **libpmemblk** function, an application may retrieve an error message describing the reason of failure
 using the following function:
 
 ```c
 const char *pmemblk_errormsg(void);
 ```
 
-The **pmemblk_errormsg**() function returns a pointer to a static buffer containing the last error message logged for current thread. The error message may 
-include description of the corresponding error code (if *errno* was set), as returned by **strerror**(3). The error message buffer is thread-local; errors 
-encountered in one thread do not affect its value in other threads. The buffer is never cleared by any library function; its content is significant only when 
-the return value of the immediately preceding call to **libpmemblk** function indicated an error, or if *errno* was set. The application must not modify or 
+The **pmemblk_errormsg**() function returns a pointer to a static buffer containing the last error message logged for current thread. The error message may
+include description of the corresponding error code (if *errno* was set), as returned by **strerror**(3). The error message buffer is thread-local; errors
+encountered in one thread do not affect its value in other threads. The buffer is never cleared by any library function; its content is significant only when
+the return value of the immediately preceding call to **libpmemblk** function indicated an error, or if *errno* was set. The application must not modify or
 free the error message string, but it may be modified by subsequent calls to other library functions.
 
-A second version of **libpmemblk**, accessed when a program uses the libraries under **/usr/lib/nvml_debug**, contains run-time assertions and trace points. 
-The typical way to access the debug version is to set the environment variable **LD_LIBRARY_PATH** to **/usr/lib/nvml_debug** or **/usr/lib64/nvml_debug** 
-depending on where the debug libraries are installed on the system. The trace points in the debug version of the library are enabled using the environment 
+A second version of **libpmemblk**, accessed when a program uses the libraries under **/usr/lib/nvml_debug**, contains run-time assertions and trace points.
+The typical way to access the debug version is to set the environment variable **LD_LIBRARY_PATH** to **/usr/lib/nvml_debug** or **/usr/lib64/nvml_debug**
+depending on where the debug libraries are installed on the system. The trace points in the debug version of the library are enabled using the environment
 variable **PMEMBLK_LOG_LEVEL**, which can be set to the following values:
 
 + **0** - This is the default level when **PMEMBLK_LOG_LEVEL** is not set. No log messages are emitted at this level.
 
-+ **1** - Additional details on any errors detected are logged (in addition to returning the *errno*-based errors as usual). The same information may be 
++ **1** - Additional details on any errors detected are logged (in addition to returning the *errno*-based errors as usual). The same information may be
 retrieved using **pmemblk_errormsg**().
 
 + **2** - A trace of basic operations is logged.
@@ -491,5 +501,5 @@ by the SNIA NVM Programming Technical Work Group:
 # SEE ALSO #
 
 **mmap**(2), **munmap**(2), **msync**(2), **strerror**(3), **libpmemobj**(3),
-**libpmemlog**(3), **libpmem**(3), **libvmem**(3)
+**libpmemlog**(3), **libpmem**(3), **libvmem**(3), **ndctl-create-namespace**(1)
 and **<http://pmem.io>**

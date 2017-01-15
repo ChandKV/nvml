@@ -31,14 +31,13 @@
 # Makefile -- top Makefile for rpmemd
 #
 
-SCP_TO_REMOTE_NODES = y
-
 vpath %.c ../../rpmem_common/
 
 TOP = ../../..
 include $(TOP)/src/common.inc
 
 ifeq ($(BUILD_RPMEM),y)
+SCP_TO_REMOTE_NODES = y
 TARGET = rpmemd
 OBJS = rpmemd.o\
        rpmemd_log.o\
@@ -56,6 +55,9 @@ LIBPMEMBLK_PRIV=btt_info_convert2h
 
 INCS += -I$(TOP)/src/rpmem_common
 CFLAGS += -DRPMEMC_LOG_RPMEMD
+ifneq ($(DEBUG),)
+CFLAGS += -DDEBUG
+endif
 CFLAGS += $(shell $(PKG_CONFIG) --cflags libfabric)
 LIBS += $(shell $(PKG_CONFIG) --libs libfabric)
 
@@ -63,8 +65,13 @@ LIBS += $(shell $(PKG_CONFIG) --libs libfabric)
 INSTALL_TARGET=$(EXPERIMENTAL)
 
 else
+ifeq ($(HAS_LIBIBVERBS),n)
+$(info NOTE: Skipping librpmem because libibverbs headers are missing. \
+Set RPMEM_DISABLE_LIBIBVERBS=y to build librpmem anyway.)
+else
 $(info NOTE: Skipping rpmemd because libfabric is missing \
 -- see src/tools/rpmemd/README for details.)
+endif
 endif
 
 include ../Makefile.inc

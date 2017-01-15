@@ -33,51 +33,15 @@
 #
 # src/test/obj_include/Makefile -- build include tests
 #
-TARGET = obj_inc
-OBJS =	obj_inc.o\
-	obj_inc_atomic_base.tmpo obj_inc_atomic.tmpo\
-	obj_inc_base.tmpo\
-	obj_inc_iter_base.tmpo obj_inc_iter.tmpo\
-	obj_inc_lists_atomic_base.tmpo obj_inc_lists_atomic.tmpo\
-	obj_inc_pool_base.tmpo obj_inc_pool.tmpo\
-	obj_inc_thread.tmpo\
-	obj_inc_tx_base.tmpo obj_inc_tx.tmpo\
-	obj_inc_types.tmpo
+TARGET = obj_include
+OBJS = obj_atomic_base_include.o obj_atomic_include.o \
+       obj_base_include.o obj_iterator_base_include.o obj_iterator_include.o \
+       obj_lists_atomic_base_include.o obj_lists_atomic_include.o \
+       obj_pool_base_include.o obj_pool_include.o obj_thread_include.o \
+       obj_tx_base_include.o obj_tx_include.o obj_types_include.o
 
 LIBPMEM=y
 LIBPMEMOBJ=y
 
 include ../Makefile.inc
 
-%.tmpo: obj_inc.c Makefile
-	@mkdir -p .deps
-	$(CC) -MD -c $(CFLAGS) $(INCS) $< -o $@
-	$(create-deps)
-
-clean-tmpo:
-	rm -f *.tmpo
-
-clean: clean-tmpo
-
-obj_inc.o:                      CFLAGS+=-DBUILD_MAIN
-
-obj_inc_atomic_base.tmpo:       CFLAGS+=-include libpmemobj/atomic_base.h
-obj_inc_atomic.tmpo:            CFLAGS+=-include libpmemobj/atomic.h
-
-obj_inc_base.tmpo:              CFLAGS+=-include libpmemobj/base.h
-
-obj_inc_iter_base.tmpo:         CFLAGS+=-include libpmemobj/iterator_base.h
-obj_inc_iter.tmpo:              CFLAGS+=-include libpmemobj/iterator.h
-
-obj_inc_lists_atomic_base.tmpo: CFLAGS+=-include libpmemobj/lists_atomic_base.h
-obj_inc_lists_atomic.tmpo:      CFLAGS+=-include libpmemobj/lists_atomic.h
-
-obj_inc_pool_base.tmpo:         CFLAGS+=-include libpmemobj/pool_base.h
-obj_inc_pool.tmpo:              CFLAGS+=-include libpmemobj/pool.h
-
-obj_inc_thread.tmpo:            CFLAGS+=-include libpmemobj/thread.h
-
-obj_inc_tx_base.tmpo:           CFLAGS+=-include libpmemobj/tx_base.h
-obj_inc_tx.tmpo:                CFLAGS+=-include libpmemobj/tx.h
-
-obj_inc_types.tmpo:             CFLAGS+=-include libpmemobj/types.h

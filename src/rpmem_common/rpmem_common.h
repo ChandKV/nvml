@@ -37,17 +37,6 @@
 /*
  * Values for SO_KEEPALIVE socket option
  */
-/*
- * The time (in seconds) the connection needs to remain idle
- * before starting keepalive.
- */
-#define RPMEM_TCP_KEEPIDLE	1
-
-/*
- * The time (in seconds) between keepalive probes.
- */
-#define RPMEM_TCP_KEEPINTVL	1
-
 
 #define RPMEM_CMD_ENV	"RPMEM_CMD"
 #define RPMEM_SSH_ENV	"RPMEM_SSH"
@@ -55,8 +44,11 @@
 #define RPMEM_DEF_SSH	"ssh"
 #define RPMEM_PROV_SOCKET_ENV	"RPMEM_ENABLE_SOCKETS"
 #define RPMEM_PROV_VERBS_ENV	"RPMEM_ENABLE_VERBS"
+#define RPMEM_ACCEPT_TIMEOUT 30000
+#define RPMEM_CONNECT_TIMEOUT 30000
 
 #include <sys/socket.h>
+#include <netdb.h>
 
 /*
  * rpmem_err -- error codes
@@ -75,6 +67,7 @@ enum rpmem_err {
 	RPMEM_ERR_PROVNOSUP	= 10,
 	RPMEM_ERR_NOEXIST	= 11,
 	RPMEM_ERR_NOACCESS	= 12,
+	RPMEM_ERR_POOL_CFG	= 13,
 
 	MAX_RPMEM_ERR,
 };
@@ -88,6 +81,8 @@ enum rpmem_persist_method {
 
 	MAX_RPMEM_PM,
 };
+
+const char *rpmem_persist_method_to_str(enum rpmem_persist_method pm);
 
 /*
  * rpmem_provider -- supported providers
@@ -124,10 +119,25 @@ struct rpmem_resp_attr {
 	enum rpmem_persist_method persist_method;
 };
 
+#define RPMEM_HAS_USER		0x1
+#define RPMEM_HAS_SERVICE	0x2
+#define RPMEM_FLAGS_USE_IPV4	0x4
+#define RPMEM_MAX_USER		(32 + 1)   /* see useradd(8) + 1 for '\0' */
+#define RPMEM_MAX_NODE		(255 + 1)  /* see gethostname(2) + 1 for '\0' */
+#define RPMEM_MAX_SERVICE	(NI_MAXSERV + 1)  /* + 1 for '\0' */
+
+struct rpmem_target_info {
+	char user[RPMEM_MAX_USER];
+	char node[RPMEM_MAX_NODE];
+	char service[RPMEM_MAX_SERVICE];
+	unsigned flags;
+};
+
 int rpmem_b64_write(int sockfd, const void *buf, size_t len, int flags);
 int rpmem_b64_read(int sockfd, void *buf, size_t len, int flags);
 const char *rpmem_get_ip_str(const struct sockaddr *addr);
-int rpmem_target_split(const char *target, char **user,
-		char **node, char **service);
+struct rpmem_target_info *rpmem_target_parse(const char *target);
+void rpmem_target_free(struct rpmem_target_info *info);
 int rpmem_xwrite(int fd, const void *buf, size_t len, int flags);
 int rpmem_xread(int fd, void *buf, size_t len, int flags);
+char *rpmem_get_ssh_conn_addr(void);

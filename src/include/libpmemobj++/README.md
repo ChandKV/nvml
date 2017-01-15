@@ -1,7 +1,7 @@
 C++ Bindings For libpmemobj	{#mainpage}
 ===========================
 
-This is the experimental C++ API for libpmemobj.
+This is the C++ API for libpmemobj.
 
 During the development of libpmemobj, many difficulties were encountered and
 compromises were made to make the C API as much user-friendly as possible. This
@@ -30,14 +30,31 @@ seamless persistent memory integration in mind. It is designed to be used with
 basic types within classes, to signify that these members in fact reside in
 persistent memory and need to be handled appropriately.
 
-Please keep in mind that these C++ bindings are still in the experimental stage
-and *SHOULD NOT* be used in production quality code. If you find any issues or
-have suggestion about these bindings please file an issue in
-https://github.com/pmem/issues. There are also blog articles in
+Please remember to take extra care when using _static class members_. They are
+not stored in persistent memory, therefore their value will _not_ always be
+consistent across subsequent executions or compilations of user applications.
+
+The C++ bindings implement an experimental, standard compliant memory allocator
+which can be used in the C++ standard library's containers. This is an
+experimental feature that should work with a custom libc++ implementation found
+here https://github.com/pmem/libcxx. Please refer to the official LLVM
+documentation on how to compile and install libc++. Also please note that the
+allocator along with the changes in the implementation of libc++ are considered
+experimental and are subject to change without prior notice.
+
+If you find any issues or have suggestion about these bindings please file an
+issue in https://github.com/pmem/issues. There are also blog articles in
 http://pmem.io/blog/ which you might find helpful.
 
 Have fun!
 The NVML team
+
+### Compiler notice ###
+The C++ bindings require a C++11 compliant compiler, therefore the minimal
+versions of GCC and Clang are 4.8.1 and 3.3 respectively. However the
+nvml::obj::transaction::automatic class requires C++17, so
+you need a more recent version for this to be available(GCC 6.1/Clang 3.7).
+It is recommended to use these or newer versions of GCC or Clang.
 
 ### Important classes/functions ###
 
@@ -50,3 +67,4 @@ The NVML team
  * Persistent memory transactions - [transaction](@ref nvml::obj::transaction)
  * Persistent memory resident mutex - [mutex](@ref nvml::obj::mutex)
  * Persistent memory pool - [pool](@ref nvml::obj::pool)
+ * Persistent memory allocator - [allocator](@ref nvml::obj::allocator)

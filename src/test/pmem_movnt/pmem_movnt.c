@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -75,8 +75,8 @@ main(int argc, char *argv[])
 		UT_ASSERTeq(dst[size], 0);
 	}
 
-	FREE(dst);
-	FREE(src);
+	ALIGNED_FREE(dst);
+	ALIGNED_FREE(src);
 
 	DONE(NULL);
 }

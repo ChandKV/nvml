@@ -1,6 +1,6 @@
 #!/bin/bash -e
 #
-# Copyright 2016, Intel Corporation
+# Copyright 2016-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -40,6 +40,7 @@ cat << EOF > $WORKDIR/src/test/testconfig.sh
 NON_PMEM_FS_DIR=/tmp
 PMEM_FS_DIR=/tmp
 PMEM_FS_DIR_FORCE_PMEM=1
+TEST_BUILD="debug nondebug"
 EOF
 
 # Configure remote tests
@@ -55,7 +56,11 @@ NODE_ADDR[1]=127.0.0.1
 NODE[2]=127.0.0.1
 NODE_WORKING_DIR[2]=/tmp/node2
 NODE_ADDR[2]=127.0.0.1
-RPMEM_PORT=1234
+NODE[3]=127.0.0.1
+NODE_WORKING_DIR[3]=/tmp/node3
+NODE_ADDR[3]=127.0.0.1
+TEST_BUILD="debug nondebug"
+TEST_PROVIDERS=sockets
 EOF
 
 	mkdir -p ~/.ssh/cm
@@ -85,4 +90,8 @@ EOF
 	ssh 127.0.0.1 exit 0
 else
 	echo "Skipping remote tests"
+	echo
+	echo "Removing all libfabric.pc files in order to simulate that libfabric is not installed:"
+	find /usr -name "libfabric.pc" 2>/dev/null
+	echo $USERPASS | sudo -S sh -c 'find /usr -name "libfabric.pc" -exec rm -f {} + 2>/dev/null'
 fi

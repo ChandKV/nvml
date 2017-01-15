@@ -106,9 +106,9 @@ my $fmt;
 my $hdr_comment_start;
 
 if ($verbose) {
-	$fmt = "%s: %d: %s\n%s\n";
+	$fmt = "%s:%d: %s\n%s\n";
 } else {
-	$fmt = "%s: %d: %s\n";
+	$fmt = "%s:%d: %s\n";
 }
 
 if ($doxygen_comments) {
@@ -120,7 +120,7 @@ if ($doxygen_comments) {
 
 # Note, following must be in single quotes so that \s and \w work right.
 my $typename = '(int|char|short|long|unsigned|float|double' .
-    '|\w+_t|struct\s+\w+|union\s+\w+|FILE)';
+    '|\w+_t|struct\s+\w+|union\s+\w+|FILE|BOOL)';
 
 # mapping of old types to POSIX compatible types
 my %old2posix = (
@@ -445,8 +445,8 @@ line: while (<$filehandle>) {
 
 	# check for errors that might occur in comments and in code.
 
-	# allow spaces to be used to draw pictures in header comments.
-	if (/[^ ]     / && !/".*     .*"/ && !$in_header_comment) {
+	# allow spaces to be used to draw pictures in header and block comments.
+	if (/[^ ]     / && !/".*     .*"/ && !$in_header_comment && !$in_comment) {
 		err("spaces instead of tabs");
 	}
 	if (/^ / && !/^ \*[ \t\/]/ && !/^ \*$/ &&
@@ -531,7 +531,7 @@ line: while (<$filehandle>) {
 		err("missing space before - operator");
 	}
 	if (/[^\-]\-[^ \-=>]/ && !/\(\-\w+\)/ &&
-		!/(return|case|=|\?|:|,|^[ \t]+)[ \t]+\-[\w\(]/ && !/(\([^\)]+\)|\[|\()\-[\w\(\]]/) {
+		!/(return|case|=|>|<|\?|:|,|^[ \t]+)[ \t]+\-[\w\(]/ && !/(\([^\)]+\)|\[|\()\-[\w\(\]]/) {
 		err("missing space after - operator");
 	}
 	if (/(return|case|=|\?|:|,|\[)[ \t]+\-[ \t]/ || /[\(\[]\-[ \t]/) {
@@ -605,6 +605,7 @@ line: while (<$filehandle>) {
 		# or "typedef void (func_t)();"
 		s/\w\s\(+\*/XXX(*/g;
 		s/\b($typename|void)\s+\(+/XXX(/og;
+		s/\btypedef\s($typename|void)\s+\(+/XXX(/og;
 		if (/\w\s\(/) {
 			err("extra space between function name and left paren");
 		}

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -50,21 +50,22 @@ struct mock_pop {
 static void
 obj_heap_persist(void *ctx, const void *ptr, size_t sz)
 {
-	pmem_msync(ptr, sz);
+	UT_ASSERTeq(pmem_msync(ptr, sz), 0);
 }
 
 static void *
 obj_heap_memset_persist(void *ctx, void *ptr, int c, size_t sz)
 {
 	memset(ptr, c, sz);
-	pmem_msync(ptr, sz);
+	UT_ASSERTeq(pmem_msync(ptr, sz), 0);
 	return ptr;
 }
 
 static void
 test_heap()
 {
-	struct mock_pop *mpop = Malloc(MOCK_POOL_SIZE);
+	struct mock_pop *mpop = MMAP_ANON_ALIGNED(MOCK_POOL_SIZE,
+		Ut_mmap_align);
 	PMEMobjpool *pop = &mpop->p;
 	memset(pop, 0, MOCK_POOL_SIZE);
 	pop->size = MOCK_POOL_SIZE;
@@ -83,6 +84,7 @@ test_heap()
 	UT_ASSERT(heap_check(heap_start, heap_size) != 0);
 	UT_ASSERT(heap_init(heap_start, heap_size, p_ops) == 0);
 	UT_ASSERT(heap_boot(heap, heap_start, heap_size, pop, p_ops) == 0);
+	UT_ASSERT(heap_buckets_init(heap) == 0);
 	UT_ASSERT(pop->heap.rt != NULL);
 
 	struct bucket *b_small = heap_get_best_bucket(heap, 1);
@@ -108,38 +110,22 @@ test_heap()
 		UT_ASSERT(blocks[i].block_off == 0);
 	}
 
-	struct memory_block *blocksp[MAX_BLOCKS] = {NULL};
-
 	struct memory_block prev;
 	heap_get_adjacent_free_block(heap, b_def, &prev, blocks[1], 1);
 	UT_ASSERT(prev.chunk_id == blocks[0].chunk_id);
-	blocksp[0] = &prev;
-
 	struct memory_block cnt;
 	heap_get_adjacent_free_block(heap, b_def, &cnt, blocks[0], 0);
 	UT_ASSERT(cnt.chunk_id == blocks[1].chunk_id);
-	blocksp[1] = &cnt;
 
 	struct memory_block next;
 	heap_get_adjacent_free_block(heap, b_def, &next, blocks[1], 0);
 	UT_ASSERT(next.chunk_id == blocks[2].chunk_id);
-	blocksp[2] = &next;
-
-	struct operation_context ctx;
-	operation_init(&ctx, pop, NULL, NULL);
-	ctx.p_ops = &pop->p_ops;
-	struct memory_block result =
-		heap_coalesce(heap, blocksp, MAX_BLOCKS, HDR_OP_FREE, &ctx);
-	operation_process(&ctx);
-
-	UT_ASSERT(result.size_idx == 3);
-	UT_ASSERT(result.chunk_id == prev.chunk_id);
 
 	UT_ASSERT(heap_check(heap_start, heap_size) == 0);
 	heap_cleanup(heap);
 	UT_ASSERT(heap->rt == NULL);
 
-	Free(mpop);
+	MUNMAP_ANON_ALIGNED(mpop, MOCK_POOL_SIZE);
 }
 
 int

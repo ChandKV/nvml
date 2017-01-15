@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -176,7 +176,9 @@ main(int argc, char *argv[])
 
 	if (access(argv[1], F_OK) != 0) {
 		pop = pmemobj_create(argv[1], "TEST",
-		THREADS * OPS_PER_THREAD * ALLOC_SIZE * FRAGMENTATION, 0666);
+		PMEMOBJ_MIN_POOL +
+		(THREADS * OPS_PER_THREAD * ALLOC_SIZE * FRAGMENTATION),
+		0666);
 	} else {
 		if ((pop = pmemobj_open(argv[1], "TEST")) == NULL) {
 			printf("failed to open pool\n");
@@ -205,6 +207,8 @@ main(int argc, char *argv[])
 	run_worker(mix_worker, args);
 	run_worker(tx_worker, args);
 	run_worker(alloc_free_worker, args);
+
+	pmemobj_close(pop);
 
 	DONE(NULL);
 }

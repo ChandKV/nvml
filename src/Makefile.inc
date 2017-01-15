@@ -37,6 +37,9 @@ include $(TOP)/src/common.inc
 
 INCLUDE = $(TOP)/src/include
 
+RPMEM_COMMON = $(TOP)/src/rpmem_common
+vpath %.c $(RPMEM_COMMON)
+
 COMMON = $(TOP)/src/common
 vpath %.c $(COMMON)
 
@@ -113,7 +116,17 @@ LIB_OUTDIR = $(objdir)/..
 LDFLAGS += -L$(LIB_OUTDIR)
 
 ifneq ($(SOURCE),)
-OBJS += $(addprefix $(objdir)/, $(patsubst $(COMMON)/%, %, $(SOURCE:.c=.o)))
+_OBJS = $(SOURCE:.c=.o)
+_OBJS_COMMON = $(patsubst $(COMMON)/%, %, $(_OBJS))
+_OBJS_RPMEM_COMMON = $(patsubst $(RPMEM_COMMON)/%, %, $(_OBJS_COMMON))
+OBJS += $(addprefix $(objdir)/, $(_OBJS_RPMEM_COMMON))
+endif
+
+ifneq ($(HEADERS),)
+ifneq ($(filter 1 2, $(CSTYLEON)),)
+TMP_HEADERS := $(addsuffix tmp, $(HEADERS))
+TMP_HEADERS := $(addprefix $(objdir)/, $(TMP_HEADERS))
+endif
 endif
 
 ifneq ($(LIBRARY_NAME),)
@@ -162,7 +175,7 @@ endif
 
 MAKEFILE_DEPS=../Makefile.inc Makefile $(TOP)/src/common.inc
 
-all: $(objdir) $(LIB_OUTDIR) $(EXTRA_TARGETS) $(LIB_AR) $(LIB_SO_SONAME) $(LIB_SO_REAL) $(LIB_SO)
+all: $(objdir) $(LIB_OUTDIR) $(EXTRA_TARGETS) $(LIB_AR) $(LIB_SO_SONAME) $(LIB_SO_REAL) $(LIB_SO) $(TMP_HEADERS)
 
 $(objdir) $(LIB_OUTDIR):
 	$(MKDIR) -p $@
@@ -208,7 +221,7 @@ endif
 
 clean: $(EXTRA_TARGETS_CLEAN)
 ifneq ($(LIBRARY_NAME),)
-	$(RM) $(OBJS)
+	$(RM) $(OBJS) $(TMP_HEADERS)
 	$(RM) $(LIB_AR_ALL) $(LIB_AR_UNSCOPED)
 endif
 
@@ -221,9 +234,13 @@ endif
 $(eval $(cstyle-rule))
 
 $(objdir)/%.o: %.c $(MAKEFILE_DEPS)
+	$(call check-cstyle, $<)
 	@mkdir -p $(objdir)/.deps
 	$(CC) -MD -c -o $@ $(CFLAGS) $(INCS) -fPIC $<
 	$(create-deps)
+
+$(objdir)/%.htmp: %.h
+	$(call check-cstyle, $<, $@)
 
 .PHONY: all clean clobber install uninstall cstyle
 

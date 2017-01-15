@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -70,6 +70,8 @@ ifeq ($(LIBPMEMPOOL), y)
 DYNAMIC_LIBS += -lpmempool
 STATIC_DEBUG_LIBS += $(LIBS_DIR)/debug/libpmempool.a
 STATIC_NONDEBUG_LIBS += $(LIBS_DIR)/nondebug/libpmempool.a
+LIBS += -ldl
+CFLAGS += -DUSE_LIBDL
 endif
 
 ifeq ($(LIBPMEMBLK), y)
@@ -163,21 +165,12 @@ STATIC_DEBUG_LIBS += $(LIBS_DIR)/debug/libvmem.a
 STATIC_NONDEBUG_LIBS += $(LIBS_DIR)/nondebug/libvmem.a
 endif
 
-TEST_TYPE = check
-TEST_BUILD = all
-TEST_FS = all
-TEST_TIME = 3m
-MEMCHECK = auto
-PMEMCHECK = auto
-HELGRIND = auto
-DRD = auto
-
 #
 # This is a helper function to be combined with usage of macros available
 # in the unittest framework. It scans the code for functions that should be
 # wrapped and adds required linker flags.
 #
-WRAPPER_FUNCS=FUNC_MOCK_RET_ALWAYS|FUNC_MOCK
+WRAPPER_FUNCS=FUNC_MOCK_RET_ALWAYS|FUNC_MOCK_RET_ALWAYS_VOID|FUNC_MOCK
 PAREN=(
 extract_funcs = $(shell \
     grep -Po '($(WRAPPER_FUNCS))\$(PAREN)\K[^,]*' $(1) | \
@@ -209,17 +202,23 @@ ifeq ($(COMPILE_LANG), cpp)
 LINKER=$(CXX)
 endif
 
+ifneq ($(TARGET),)
+SCP_TARGET=$(TARGET)
+SCP_SRC_DIR=.
 #
 # By default debug and non-debug static versions are built.
-# It can be changed by setting BUILD_STATIC_DEBUG
-# or BUILD_STATIC_NONDEBUG to 'n'.
+# It can be changed by setting BUILD_STATIC_DEBUG, BUILD_STATIC_NONDEBUG
+# or BUILD_STATIC (for both of them) to 'n'.
 #
-ifneq ($(TARGET),)
+ifneq ($(BUILD_STATIC),n)
 ifneq ($(BUILD_STATIC_DEBUG),n)
 TARGET_STATIC_DEBUG=$(TARGET).static-debug
+SCP_TARGET_STATIC_DEBUG=$(SCP_SRC_DIR)/$(SCP_TARGET).static-debug
 endif
 ifneq ($(BUILD_STATIC_NONDEBUG),n)
 TARGET_STATIC_NONDEBUG=$(TARGET).static-nondebug
+SCP_TARGET_STATIC_NONDEBUG=$(SCP_SRC_DIR)/$(SCP_TARGET).static-nondebug
+endif
 endif
 endif
 
@@ -227,41 +226,71 @@ SCP=../sync-remotes/copy-to-remote-nodes.sh
 TESTCONFIG=../testconfig.sh
 SYNC_FILE=.synced
 
-ifdef TARGET
-SCP_TARGET=$(TARGET)
-SCP_SRC_DIR=.
+MAKEFILE_DEPS=Makefile ../Makefile.inc $(TOP)/src/common.inc
+
+ifneq ($(HEADERS),)
+ifneq ($(filter 1 2, $(CSTYLEON)),)
+TMP_HEADERS := $(addsuffix tmp, $(HEADERS))
+endif
 endif
 
-MAKEFILE_DEPS=Makefile ../Makefile.inc $(TOP)/src/common.inc
+ifeq ($(USE_LLVM_LIBCPP),1)
+
+$(call check_defined, LIBCPP_LIBDIR LIBCPP_INCDIR, when using USE_LLVM_LIBCPP)
+
+ifeq ($(COMPILE_LANG), cpp)
+CXXFLAGS += -stdlib=libc++
+INCS += -I$(LIBCPP_INCDIR)
+LIBS += -L$(LIBCPP_LIBDIR) -lc++ -lc++abi
+LDFLAGS += -stdlib=libc++ -Wl,-rpath,$(LIBCPP_LIBDIR)
+endif
+endif
+
+ifeq ($(USE_CUSTOM_GCC),1)
+
+$(call check_defined, GCC_LIBDIR GCC_INCDIR,\
+		when using USE_CUSTOM_GCC)
+
+ifeq ($(COMPILE_LANG), cpp)
+INCS += -I$(GCC_INCDIR)
+LIBS += -L$(GCC_LIBDIR)
+LDFLAGS += -Wl,-rpath,$(GCC_LIBDIR)
+endif
+endif
 
 all: $(TARGET) $(TARGET_STATIC_DEBUG) $(TARGET_STATIC_NONDEBUG)
 
 $(UT):
 	$(MAKE) -C ../unittest
 
-$(TARGET_STATIC_DEBUG): $(OBJS) $(UT) $(STATIC_DEBUG_LIBS) $(EXTRA_DEPS) $(MAKEFILE_DEPS)
+$(TARGET_STATIC_DEBUG): $(TMP_HEADERS) $(OBJS) $(UT) $(STATIC_DEBUG_LIBS) $(EXTRA_DEPS) $(MAKEFILE_DEPS)
 	$(LINKER) -o $@ $(LDFLAGS) $(OBJS) $(STATIC_DEBUG_LIBS) $(LIBS)
 
-$(TARGET_STATIC_NONDEBUG): $(OBJS) $(UT) $(STATIC_NONDEBUG_LIBS) $(EXTRA_DEPS) $(MAKEFILE_DEPS)
+$(TARGET_STATIC_NONDEBUG): $(TMP_HEADERS) $(OBJS) $(UT) $(STATIC_NONDEBUG_LIBS) $(EXTRA_DEPS) $(MAKEFILE_DEPS)
 	$(LINKER) -o $@ $(LDFLAGS) $(OBJS) $(STATIC_NONDEBUG_LIBS) $(LIBS)
 
-$(TARGET): $(OBJS) $(UT) $(EXTRA_DEPS) $(MAKEFILE_DEPS)
+$(TARGET): $(TMP_HEADERS) $(OBJS) $(UT) $(EXTRA_DEPS) $(MAKEFILE_DEPS)
 	$(LINKER) -o $@ $(LDFLAGS) $(OBJS) $(DYNAMIC_LIBS) $(LIBS)
 
 objdir=.
 
 %.o: %.c $(MAKEFILE_DEPS)
+	$(call check-cstyle, $<)
 	@mkdir -p .deps
 	$(CC) -MD -c $(CFLAGS) $(INCS) $< -o $@
 	$(create-deps)
 
 %.o: %.cpp $(MAKEFILE_DEPS)
+	$(call check-cstyle, $<)
 	@mkdir -p .deps
 	$(CXX) -MD -c $(CXXFLAGS) $(INCS) $< -o $@
 	$(create-deps)
 
+%.htmp: %.h
+	$(call check-cstyle, $<, $@)
+
 clean:
-	$(RM) *.o */*.o core a.out *.log testfile* $(SYNC_FILE)
+	$(RM) *.o */*.o core a.out *.log testfile* $(SYNC_FILE) $(TMP_HEADERS)
 
 clobber: clean
 	$(RM) $(TARGET) $(TARGET_STATIC_DEBUG) $(TARGET_STATIC_NONDEBUG)
@@ -271,7 +300,14 @@ $(TESTCONFIG):
 
 $(SYNC_FILE): $(TARGET) $(TESTCONFIG)
 ifeq ($(SCP_TO_REMOTE_NODES), y)
-	$(SCP) test $(SCP_SRC_DIR)/$(SCP_TARGET) $(SCP_SRC_DIR)/$(SCP_TARGET).static-debug $(SCP_SRC_DIR)/$(SCP_TARGET).static-nondebug
+ifeq ($(SCP_TARGET),)
+	$(SCP) test
+else
+ifeq ($(SCP_SRC_DIR),)
+$(error SCP_SRC_DIR is not set)
+endif
+	$(SCP) test $(SCP_SRC_DIR)/$(SCP_TARGET) $(SCP_TARGET_STATIC_DEBUG) $(SCP_TARGET_STATIC_NONDEBUG)
+endif
 	@touch $(SYNC_FILE)
 endif
 
@@ -281,10 +317,10 @@ TST=$(shell basename `pwd`)
 TSTCHECKS=$(shell ls -1 TEST* | grep -v -i -e "\.ps1" | sort -V)
 
 $(TSTCHECKS): all sync-test
-	@cd .. && ./RUNTESTS ${TST} -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -m $(MEMCHECK) -p $(PMEMCHECK) -e $(HELGRIND) -d $(DRD) -s $@
+	@cd .. && ./RUNTESTS ${TST} $(RUNTEST_OPTIONS) -s $@
 
 check: all sync-test
-	@cd .. && ./RUNTESTS ${TST} -b $(TEST_BUILD) -t $(TEST_TYPE) -f $(TEST_FS) -o $(TEST_TIME) -m $(MEMCHECK) -p $(PMEMCHECK) -e $(HELGRIND) -d $(DRD)
+	@cd .. && ./RUNTESTS ${TST} $(RUNTEST_OPTIONS)
 
 pcheck: export NOTTY=1
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,10 +36,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <sys/queue.h>
 #include <stdarg.h>
 #include <stdbool.h>
 
+#include "queue.h"
 #include "log.h"
 #include "blk.h"
 #include "libpmemobj.h"
@@ -154,7 +154,7 @@ struct option_requirement {
 };
 
 struct options {
-	const struct option *options;
+	const struct option *opts;
 	size_t noptions;
 	char *bitmap;
 	const struct option_requirement *req;
@@ -200,6 +200,8 @@ int pool_set_file_write(struct pool_set_file *file, void *buff,
 int pool_set_file_set_replica(struct pool_set_file *file, size_t replica);
 size_t pool_set_file_nreplicas(struct pool_set_file *file);
 void *pool_set_file_map(struct pool_set_file *file, uint64_t offset);
+void pool_set_file_persist(struct pool_set_file *file,
+		const void *addr, size_t len);
 
 struct range {
 	LIST_ENTRY(range) next;
@@ -254,6 +256,8 @@ util_count_ones(uint64_t val)
 	return (uint32_t)__builtin_popcountll(val);
 }
 
-static const struct range ENTIRE_UINT64 = { .first = 0,
-.last = UINT64_MAX
+static const struct range ENTIRE_UINT64 = {
+	{ NULL, NULL },	/* range */
+	0,		/* first */
+	UINT64_MAX	/* last */
 };

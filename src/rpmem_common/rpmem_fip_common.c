@@ -45,6 +45,8 @@
 
 #include "rpmem_common_log.h"
 
+#include "valgrind_internal.h"
+
 #include <rdma/fi_errno.h>
 
 /*
@@ -88,8 +90,7 @@ rpmem_fip_get_hints(enum rpmem_provider provider)
 	/* READ-after-WRITE and SEND-after-WRITE message ordering required */
 	hints->tx_attr->msg_order = FI_ORDER_RAW | FI_ORDER_SAW;
 
-	/* IPv4 address format */
-	hints->addr_format = FI_SOCKADDR_IN;
+	hints->addr_format = FI_SOCKADDR;
 
 	if (provider != RPMEM_PROV_UNKNOWN) {
 		const char *prov_name = rpmem_provider_to_str(provider);
@@ -164,19 +165,25 @@ rpmem_fip_read_eq(struct fid_eq *eq, struct fi_eq_cm_entry *entry,
 	uint32_t event;
 	struct fi_eq_err_entry err;
 
-	sret = fi_eq_sread(eq, &event, entry, sizeof(*entry), -1, 0);
-	if (timeout != -1 && sret == -FI_ETIMEDOUT)
+	sret = fi_eq_sread(eq, &event, entry, sizeof(*entry), timeout, 0);
+	VALGRIND_DO_MAKE_MEM_DEFINED(&sret, sizeof(sret));
+
+	if (timeout != -1 && sret == -FI_ETIMEDOUT) {
+		errno = ETIMEDOUT;
 		return 1;
+	}
 
 	if (sret < 0 || (size_t)sret != sizeof(*entry)) {
 		ret = (int)sret;
 
 		sret = fi_eq_readerr(eq, &err, 0);
 		if (sret < 0) {
+			errno = EIO;
 			RPMEMC_LOG(ERR, "error reading from event queue: "
 				"cannot read error from event queue: %s",
 				fi_strerror((int)sret));
 		} else {
+			errno = -err.prov_errno;
 			RPMEMC_LOG(ERR, "error reading from event queue: %s",
 					fi_eq_strerror(eq, err.prov_errno,
 						NULL, NULL, 0));
@@ -186,6 +193,7 @@ rpmem_fip_read_eq(struct fid_eq *eq, struct fi_eq_cm_entry *entry,
 	}
 
 	if (event != exp_event || entry->fid != exp_fid) {
+		errno = EIO;
 		RPMEMC_LOG(ERR, "unexpected event received (%u) "
 				"expected (%u)%s", event, exp_event,
 				entry->fid != exp_fid ?
@@ -281,4 +289,40 @@ rpmem_fip_max_nlanes(struct fi_info *fi, enum rpmem_persist_method pm,
 	size_t max_by_rq = rq_size / rq_div;
 
 	return min(max_by_sq, max_by_rq);
+}
+
+/*
+ * rpmem_fip_print_info -- print some useful info about fabric interface
+ */
+void
+rpmem_fip_print_info(struct fi_info *fi)
+{
+	RPMEMC_LOG(INFO, "libfabric version: %s",
+			fi_tostr(fi, FI_TYPE_VERSION));
+
+	char *str = fi_tostr(fi, FI_TYPE_INFO);
+	char *buff = strdup(str);
+	if (!buff) {
+		RPMEMC_LOG(ERR, "!allocating string buffer for "
+				"libfabric interface information");
+		return;
+	}
+
+	RPMEMC_LOG(INFO, "libfabric interface info:");
+
+	char *nl = buff;
+	char *last = buff;
+	while (last != NULL) {
+		nl = strchr(last, '\n');
+		if (nl) {
+			*nl = '\0';
+			nl++;
+		}
+
+		RPMEMC_LOG(INFO, "%s", last);
+
+		last = nl;
+	}
+
+	free(buff);
 }

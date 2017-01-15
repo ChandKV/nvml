@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -43,3 +43,12 @@ extern unsigned long long Pagesize;
 void pmem_init(void);
 
 int is_pmem_proc(const void *addr, size_t len);
+
+#if defined(_WIN32) && (NTDDI_VERSION >= NTDDI_WIN10_RS1)
+typedef BOOL (WINAPI *PQVM)(
+		HANDLE, const void *,
+		enum WIN32_MEMORY_INFORMATION_CLASS, PVOID,
+		SIZE_T, PSIZE_T);
+
+extern PQVM Func_qvmi;
+#endif

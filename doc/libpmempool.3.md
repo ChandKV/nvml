@@ -3,7 +3,7 @@ layout: manual
 Content-Style: 'text/css'
 title: libpmempool(3)
 header: NVM Library
-date: pmempool API version 1.0.2
+date: pmempool API version 1.1.0
 ...
 
 [comment]: <> (Copyright 2016, Intel Corporation)
@@ -39,6 +39,7 @@ date: pmempool API version 1.0.2
 [SYNOPSIS](#synopsis)<br />
 [DESCRIPTION](#description)<br />
 [POOL CHECKING FUNCTIONS](#pool-checking-functions)<br />
+[POOLSET SYNCHRONIZATION AND TRANSFORMATION](#poolset-synchronization-and-transformation-1)<br />
 [LIBRARY API VERSIONING](#library-api-versioning-1)<br />
 [DEBUGGING AND ERROR HANDLING](#debugging-and-error-handling)<br />
 [EXAMPLE](#example)<br />
@@ -67,11 +68,20 @@ struct pmempool_check_status *pmempool_check(PMEMpoolcheck *ppc);
 enum pmempool_check_result pmempool_check_end(PMEMpoolcheck *ppc);
 ```
 
+##### Poolset synchronization and transformation: #####
+
+```c
+int pmempool_sync(const char *poolset_file, unsigned flags); (EXPERIMENTAL)
+
+int pmempool_transform(const char *poolset_file_src,
+	const char *poolset_file_dst,
+	unsigned flags); (EXPERIMENTAL)
+```
+
 ##### Library API versioning: #####
 
 ```c
-const char *pmempool_check_version(
-	unsigned major_required,
+const char *pmempool_check_version(unsigned major_required,
 	unsigned minor_required);
 ```
 
@@ -98,10 +108,6 @@ is for applications that need high reliability or built-in
 troubleshooting. It may be useful for testing and debugging
 purposes also.
 
-Currently **libpmempool** implements only consistency check and
-repair functions.
-
-
 # POOL CHECKING FUNCTIONS #
 
 To perform check provided by **libpmempool**, a *check context*
@@ -121,6 +127,9 @@ When check is completed **pmempool_check**() returns NULL pointer.
 Check must be finalized using **pmempool_check_end**().
 It returns *enum pmempool_check_result* describing
 result of the whole check.
+
+# NOTE #
+Currently, checking the consistency of a *pmemobj* pool is **not** supported.
 
 ```c
 PMEMpoolcheck *pmempool_check_init(struct pmempool_check_args *args,
@@ -153,7 +162,7 @@ struct pmempool_check_args
 The *flags* argument accepts any combination of the following values (ORed):
 
 + **PMEMPOOL_CHECK_REPAIR** - perform repairs
-+ **PMEMPOOL_CHECK_DRY_RUN** - emulate repairs
++ **PMEMPOOL_CHECK_DRY_RUN** - emulate repairs, not supported on Device DAX
 + **PMEMPOOL_CHECK_ADVANCED** - perform hazardous repairs
 + **PMEMPOOL_CHECK_ALWAYS_YES** - do not ask before repairs
 + **PMEMPOOL_CHECK_VERBOSE** - generate info statuses
@@ -178,6 +187,11 @@ performed.
 with exactly the same size) as the source *poolset*. It is valid only in case
 *path* is a *poolset*. It indicates backup will be performed in a form
 described by the *backup_path* *poolset*.
+
+Backup is supported only if the source *poolset* has no defined replicas.
+
+Poolsets with remote replicas are not supported neither as *path* nor as
+*backup_path*.
 
 This is an example of a *check context* initialization:
 
@@ -260,12 +274,102 @@ return one of the following values:
 + **PMEMPOOL_CHECK_RESULT_CONSISTENT** - the *pool* is consistent
 + **PMEMPOOL_CHECK_RESULT_NOT_CONSISTENT** - the *pool* is not consistent
 + **PMEMPOOL_CHECK_RESULT_REPAIRED** - the *pool* has issues but all repair
-  steps completed succesfully
+  steps completed successfully
 + **PMEMPOOL_CHECK_RESULT_CANNOT_REPAIR** - the *pool* has issues which
   can not be repaired
 + **PMEMPOOL_CHECK_RESULT_ERROR** - the *pool* has errors or the check
   encountered issue
 
+
+# POOLSET SYNCHRONIZATION AND TRANSFORMATION #
+
+### POOLSET SYNC ###
+
+```c
+int pmempool_sync(const char *poolset_file, unsigned flags); (EXPERIMENTAL)
+```
+
+The **pmempool_sync**() function synchronizes data between replicas within
+a poolset.
+
+**pmempool_sync**() accepts two arguments:
+
+* *poolset_file* - a path to a poolset file,
+
+* *flags* - a combination of flags (ORed) which modify the way of
+synchronization.
+
+NOTE: Only the poolset file used to create the pool should be used
+for syncing the pool.
+
+The following flags are available:
+
+* **PMEMPOOL_DRY_RUN** - do not apply changes, only check for viability of
+synchronization.
+
+**pmempool_sync**() function checks if metadata of all replicas in a poolset
+are consistent, i.e. all parts are healthy, and if any of them is not,
+the corrupted or missing parts are recreated and filled with data from one of
+the healthy replicas.
+
+The function returns either 0 on success or -1 in case of error
+with proper errno set accordingly.
+
+>NOTE: The **pmempool_sync**() API is experimental and it may change in future
+versions of the library.
+
+### POOLSET TRANSFORM ###
+
+```c
+int pmempool_transform(const char *poolset_file_src,
+	const char *poolset_file_dst,
+	unsigned flags); (EXPERIMENTAL)
+```
+
+The **pmempool_transform**() function modifies internal structure of a poolset.
+It supports the following operations:
+
+* adding one or more replicas,
+
+* removing one or more replicas,
+
+* reordering of replicas.
+
+Currently these operations are allowed only for **pmemobj** pools (see
+**libpmemobj**(3)).
+
+
+**pmempool_transform**() accepts three arguments:
+
+* *poolset_file_src* - a path to a poolset file which defines the source
+poolset to be changed,
+
+* *poolset_file_dst* - a path to a poolset file which defines the target
+structure of the poolset,
+
+* *flags* - a combination of flags (ORed) which modify the way of
+synchronization.
+
+The following flags are available:
+
+* **PMEMPOOL_DRY_RUN** - do not apply changes, only check for viability of
+synchronization.
+
+When adding or deleting replicas, the two poolset files can differ only in the
+definitions of replicas which are to be added or deleted. One cannot add and
+remove replicas in the same step. Only one of these operations can be performed
+at a time. Reordering replicas can be combined with any of them.
+Also, to add a replica it is necessary for its effective size to match or exceed
+the pool size. Otherwise the whole operation fails and no changes are applied.
+Effective size of a replica is the sum of sizes of all its part files decreased
+by 4096 bytes per each part file. The 4096 bytes of each part file is
+utilized for storing internal metadata of the pool part files.
+
+The function returns either 0 on success or -1 in case of error
+with proper errno set accordingly.
+
+>NOTE: The **pmempool_transform**() API is experimental and it may change in future
+versions of the library.
 
 # LIBRARY API VERSIONING #
 
@@ -353,16 +457,20 @@ the debug version of the library are enabled using the
 environment variable **PMEMPOOL_LOG_LEVEL**, which can be
 set to the following values:
 
-+ **0** - This is the default level when **PMEMPOOL_LOG_LEVEL** is not set. No log messages are emitted at this level.
++ **0** - This is the default level when **PMEMPOOL_LOG_LEVEL** is not set.
+No log messages are emitted at this level.
 
-+ **1** - Additional details on any errors detected are logged (in addition to returning the *errno*-based errors as usual). The same information may be 
++ **1** - Additional details on any errors detected are logged (in addition to
+returning the *errno*-based errors as usual). The same information may be
 retrieved using **pmempool_errormsg**().
 
 + **2** - A trace of basic operations is logged.
 
-+ **3** - This level enables a very verbose amount of function call tracing in the library.
++ **3** - This level enables a very verbose amount of function call tracing in
+the library.
 
-+ **4** - This level enables voluminous and fairly obscure tracing information that is likely only useful to the libpmempool developers.
++ **4** - This level enables voluminous and fairly obscure tracing information
+that is likely only useful to the libpmempool developers.
 
 The environment variable **PMEMPOOL_LOG_FILE** specifies a file name
 where all logging information should be written. If the last

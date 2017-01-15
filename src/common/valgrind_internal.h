@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,6 +46,10 @@
 
 #if defined(USE_VG_PMEMCHECK) || defined(USE_VG_HELGRIND) ||\
 	defined(USE_VG_MEMCHECK) || defined(USE_VG_DRD)
+#define ANY_VG_TOOL_ENABLED
+#endif
+
+#ifdef ANY_VG_TOOL_ENABLED
 extern unsigned _On_valgrind;
 #define On_valgrind __builtin_expect(_On_valgrind, 0)
 #include <valgrind/valgrind.h>

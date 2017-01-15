@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -54,7 +54,7 @@ pool_create(const char *path, const char *layout, size_t poolsize,
 	if (pop == NULL)
 		UT_OUT("!%s: pmemobj_create", path);
 	else {
-		struct stat stbuf;
+		ut_util_stat_t stbuf;
 		STAT(path, &stbuf);
 
 		UT_OUT("%s: file size %zu mode 0%o",

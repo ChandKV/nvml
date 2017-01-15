@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,5 +36,10 @@
 struct logentry {
 	size_t len;		/* length of the rest of the log entry */
 	time_t timestamp;
+#ifndef _WIN32
 	pid_t pid;
+#else
+	int pid;
+#endif
+
 };

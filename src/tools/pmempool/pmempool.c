@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -49,6 +49,14 @@
 #include "check.h"
 #include "rm.h"
 #include "convert.h"
+#include "synchronize.h"
+#include "transform.h"
+#include "set.h"
+
+#ifndef _WIN32
+#include "rpmem_common.h"
+#include "rpmem_util.h"
+#endif
 
 #define APPNAME	"pmempool"
 
@@ -147,6 +155,18 @@ static struct command commands[] = {
 		.help = pmempool_convert_help,
 	},
 	{
+		.name = "sync",
+		.brief = "synchronize data between replicas",
+		.func = pmempool_sync_func,
+		.help = pmempool_sync_help,
+	},
+	{
+		.name = "transform",
+		.brief = "modify internal structure of a poolset",
+		.func = pmempool_transform_func,
+		.help = pmempool_transform_help,
+	},
+	{
 		.name = "help",
 		.brief = "print help text about a command",
 		.func = help_func,
@@ -192,8 +212,11 @@ print_help(char *appname)
 	printf("\n");
 	printf("The available commands are:\n");
 	unsigned i;
-	for (i = 0; i < COMMANDS_NUMBER; i++)
-		printf("%s\t- %s\n", commands[i].name, commands[i].brief);
+	for (i = 0; i < COMMANDS_NUMBER; i++) {
+		const char *format = (strlen(commands[i].name) / 8)
+				? "%s\t- %s\n" : "%s\t\t- %s\n";
+		printf(format, commands[i].name, commands[i].brief);
+	}
 	printf("\n");
 	printf("For complete documentation see %s(1) manual page.\n", appname);
 }
@@ -221,6 +244,11 @@ main(int argc, char *argv[])
 
 	util_init();
 
+#ifndef _WIN32
+	util_remote_init();
+	rpmem_util_cmds_init();
+#endif
+
 	if (argc < 2) {
 		print_usage(APPNAME);
 		return 0;
@@ -245,10 +273,20 @@ main(int argc, char *argv[])
 
 	struct command *cmdp = get_command(cmd_str);
 
-	if (cmdp)
-		return cmdp->func(APPNAME, argc - 1, argv + 1);
+	int ret;
+	if (cmdp) {
+		ret = cmdp->func(APPNAME, argc - 1, argv + 1);
+	} else {
+		outv_err("'%s' -- unknown command\n", cmd_str);
+		ret = 1;
+	}
+#ifndef _WIN32
+	util_remote_fini();
+	rpmem_util_cmds_fini();
+#endif
 
-	outv_err("'%s' -- unknown command\n", cmd_str);
+	if (ret)
+		exit(EXIT_FAILURE);
 
-	return -1;
+	exit(EXIT_SUCCESS);
 }

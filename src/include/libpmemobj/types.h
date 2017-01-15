@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -200,8 +200,11 @@ TOID_DECLARE_ROOT(t);
 /*
  * XXX - On Windows, these macros do not behave exactly the same as on Linux.
  */
-#define DIRECT_RW(o) ((__typeof__((o)._type))pmemobj_direct((o).oid))
-#define DIRECT_RO(o) ((const __typeof__((o)._type))pmemobj_direct((o).oid))
+#define DIRECT_RW(o) \
+	(reinterpret_cast < __typeof__((o)._type) > (pmemobj_direct((o).oid)))
+#define DIRECT_RO(o) \
+	(reinterpret_cast < const __typeof__((o)._type) > \
+	(pmemobj_direct((o).oid)))
 
 #endif /* (defined(_MSC_VER) || defined(__cplusplus)) */
 

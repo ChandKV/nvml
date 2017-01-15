@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -48,13 +48,13 @@
  * "a" and "v" require a parameter string(s) separated by a colon
  */
 
+#include <ex_common.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
-#include <pthread.h>
 
 #include "libpmemobj.h"
 #include "libpmem.h"
@@ -224,13 +224,18 @@ pmemlog_walk(PMEMlogpool *plp, size_t chunksize,
 static int
 process_chunk(const void *buf, size_t len, void *arg)
 {
-	char tmp[len + 1];
+	char *tmp = malloc(len + 1);
+	if (tmp == NULL) {
+		fprintf(stderr, "malloc error\n");
+		return 0;
+	}
 
 	memcpy(tmp, buf, len);
 	tmp[len] = '\0';
 
 	printf("log contains:\n");
 	printf("%s\n", tmp);
+	free(tmp);
 	return 1; /* continue */
 }
 
@@ -276,7 +281,7 @@ main(int argc, char *argv[])
 
 	PMEMlogpool *plp;
 	if (strncmp(argv[1], "c", 1) == 0) {
-		plp = pmemlog_create(argv[2], POOL_SIZE, S_IRUSR | S_IWUSR);
+		plp = pmemlog_create(argv[2], POOL_SIZE, CREATE_MODE_RW);
 	} else if (strncmp(argv[1], "o", 1) == 0) {
 		plp = pmemlog_open(argv[2]);
 	} else {
@@ -303,8 +308,8 @@ main(int argc, char *argv[])
 			case 'v': {
 				printf("appendv: %s\n", argv[i] + 2);
 				int count = count_iovec(argv[i] + 2);
-				struct iovec *iov = malloc(count
-						* sizeof(struct iovec));
+				struct iovec *iov = calloc(count,
+						sizeof(struct iovec));
 				if (iov == NULL) {
 					fprintf(stderr, "malloc error\n");
 					return 1;

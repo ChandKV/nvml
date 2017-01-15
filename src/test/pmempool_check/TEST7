@@ -38,6 +38,8 @@ export UNITTEST_NUM=7
 
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type pmem non-pmem
 
 setup
@@ -62,7 +64,8 @@ $PMEMSPOIL -v $POOL\
 	pool_hdr.next_part_uuid=ERROR_NEXT\
 	>> $LOG
 expect_abnormal_exit $PMEMPOOL$EXESUFFIX check $POOL >> $LOG
-expect_normal_exit $PMEMPOOL$EXESUFFIX check -vyr $POOL >> $LOG
+expect_abnormal_exit $PMEMPOOL$EXESUFFIX check -vyr $POOL >> $LOG
+expect_normal_exit $PMEMPOOL$EXESUFFIX check -avyr $POOL >> $LOG
 expect_normal_exit $PMEMPOOL$EXESUFFIX check -v $POOL >> $LOG
 
 rm -f $POOL
@@ -75,7 +78,8 @@ $PMEMSPOIL -v $POOL\
 	pool_hdr.next_repl_uuid=ERROR_RNEXT\
 	>> $LOG
 expect_abnormal_exit $PMEMPOOL$EXESUFFIX check $POOL >> $LOG
-expect_normal_exit $PMEMPOOL$EXESUFFIX check -vyr $POOL >> $LOG
+expect_abnormal_exit $PMEMPOOL$EXESUFFIX check -vyr $POOL >> $LOG
+expect_normal_exit $PMEMPOOL$EXESUFFIX check -avyr $POOL >> $LOG
 expect_normal_exit $PMEMPOOL$EXESUFFIX check -v $POOL >> $LOG
 
 check

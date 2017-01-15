@@ -3,7 +3,7 @@ layout: manual
 Content-Style: 'text/css'
 title: pmempool-create(1)
 header: NVM Library
-date: pmem Tools version 1.0.2
+date: pmem Tools version 1.2.0
 ...
 
 [comment]: <> (Copyright 2016, Intel Corporation)
@@ -89,7 +89,8 @@ Set size of pool to available space of underlying file system.
 
 `-m, --mode <octal>`
 
-Set permissions to <octal> (the default is 0664).
+Set permissions to <octal> (the default is 0664) when creating the files.
+If the file already exist the permissions are not changed.
 
 `-i, --inherit <file>`
 

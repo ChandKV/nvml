@@ -3,7 +3,7 @@ layout: manual
 Content-Style: 'text/css'
 title: pmempool-dump(1)
 header: NVM Library
-date: pmem Tools version 1.0.1
+date: pmem Tools version 1.2.0
 ...
 
 [comment]: <> (Copyright 2016, Intel Corporation)
@@ -61,7 +61,7 @@ The **pmempool** invoked with *dump* command dumps user data from specified pool
 
 By default the output format is hexadecimal.
 
-By default data is dumped to standard output. It is possible to dump data to other file by specifying **-o** option. In this case data will be appended to this 
+By default data is dumped to standard output. It is possible to dump data to other file by specifying **-o** option. In this case data will be appended to this
 file.
 
 Using **-r** option you can specify number of blocks/bytes/data chunks using special text format. See **RANGE** section for details.

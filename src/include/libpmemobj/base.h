@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -43,6 +43,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#ifdef _WIN32
+#include <pmemcompat.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -119,6 +122,11 @@ void *pmemobj_direct(PMEMoid oid);
 
 #endif /* _WIN32 */
 
+/*
+ * Returns the OID of the object pointed to by addr.
+ */
+PMEMoid pmemobj_oid(const void *addr);
+
 const char *pmemobj_errormsg(void);
 
 /*
@@ -179,7 +187,7 @@ void pmemobj_drain(PMEMobjpool *pop);
  * verify that the version available at run-time is compatible with the version
  * used at compile-time by passing these defines to pmemobj_check_version().
  */
-#define PMEMOBJ_MAJOR_VERSION 1
+#define PMEMOBJ_MAJOR_VERSION 2
 #define PMEMOBJ_MINOR_VERSION 0
 const char *pmemobj_check_version(
 		unsigned major_required,
@@ -203,28 +211,6 @@ typedef int (*pmemobj_constr)(PMEMobjpool *pop, void *ptr, void *arg);
  */
 void _pobj_debug_notice(const char *func_name, const char *file, int line);
 
-/*
- * Debug helper function and macros
- */
-#ifdef DEBUG
-
-/*
- * (debug helper macro) logs notice message if used inside a transaction
- */
-#define _POBJ_DEBUG_NOTICE_IN_TX()\
-	_pobj_debug_notice(__func__, NULL, 0)
-
-/*
- * (debug helper macro) logs notice message if used inside a transaction
- *                      - to be used only in FOREACH macros
- */
-#define _POBJ_DEBUG_NOTICE_IN_TX_FOR(macro_name)\
-	_pobj_debug_notice(macro_name, __FILE__, __LINE__),
-
-#else
-#define _POBJ_DEBUG_NOTICE_IN_TX() do {} while (0)
-#define _POBJ_DEBUG_NOTICE_IN_TX_FOR(macro_name)
-#endif /* DEBUG */
 
 #ifdef __cplusplus
 }

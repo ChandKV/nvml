@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  * Copyright (c) 2016, Microsoft Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,8 +47,23 @@ extern "C" {
 #include <stdio.h>
 #include <ctype.h>
 
+#include <sys/param.h>
+
 extern unsigned long long Pagesize;
 extern unsigned long long Mmap_align;
+
+#define PAGE_ALIGNED_DOWN_SIZE(size) ((size) & ~(Pagesize - 1))
+#define PAGE_ALIGNED_UP_SIZE(size)\
+	PAGE_ALIGNED_DOWN_SIZE((size) + (Pagesize - 1))
+#define IS_PAGE_ALIGNED(size) (((size) & (Pagesize - 1)) == 0)
+#define PAGE_ALIGN_UP(addr) ((void *)PAGE_ALIGNED_UP_SIZE((uintptr_t)(addr)))
+
+#define MMAP_ALIGN_UP(size) (((size) + Mmap_align - 1) & ~(Mmap_align - 1))
+#define MMAP_ALIGN_DOWN(size) ((size) & ~(Mmap_align - 1))
+
+#define ADDR_SUM(vp, lp) ((void *)((char *)(vp) + lp))
+
+#define util_alignof(t) offsetof(struct {char _util_c; t _util_m; }, _util_m)
 
 /*
  * overridable names for malloc & friends used by this library
@@ -69,6 +84,10 @@ int util_is_zeroed(const void *addr, size_t len);
 int util_checksum(void *addr, size_t len, uint64_t *csump, int insert);
 int util_parse_size(const char *str, size_t *sizep);
 char *util_fgets(char *buffer, int max, FILE *stream);
+char *util_realpath(const char *path);
+int util_compare_file_inodes(const char *path1, const char *path2);
+void *util_aligned_malloc(size_t alignment, size_t size);
+void util_aligned_free(void *ptr);
 
 #define UTIL_MAX_ERR_MSG 128
 void util_strerror(int errnum, char *buff, size_t bufflen);
@@ -148,6 +167,8 @@ util_get_printable_ascii(char c)
 	return isprint((unsigned char)c) ? c : '.';
 }
 
+char *util_concat_str(const char *s1, const char *s2);
+
 #if !defined(likely)
 #if defined(__GNUC__)
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -181,6 +202,25 @@ util_get_printable_ascii(char c)
 #define ATTR_DESTRUCTOR
 #endif
 
+#ifndef _MSC_VER
+#define CONSTRUCTOR(fun) ATTR_CONSTRUCTOR
+#else
+#ifdef __cplusplus
+#define CONSTRUCTOR(fun)		\
+void fun();				\
+struct _##fun {			\
+	_##fun() {			\
+		fun();			\
+	}				\
+}; static  _##fun foo;			\
+static
+#else
+#define CONSTRUCTOR(fun) \
+	MSVC_CONSTR(fun) \
+	static
+#endif
+#endif
+
 #ifdef __GNUC__
 #define CHECK_FUNC_COMPATIBLE(func1, func2)\
 	COMPILE_ERROR_ON(!__builtin_types_compatible_p(typeof(func1),\
@@ -188,6 +228,22 @@ util_get_printable_ascii(char c)
 #else
 #define CHECK_FUNC_COMPATIBLE(func1, func2) do {} while (0)
 #endif /* __GNUC__ */
+
+#define PERSIST_GENERIC(is_pmem, addr, len) do {\
+	void *raddr = addr; size_t rlen = len;\
+	if (is_pmem) \
+		pmem_persist(raddr, rlen);\
+	else\
+		pmem_msync(raddr, rlen);\
+} while (0)
+
+#define PERSIST_GENERIC_AUTO(addr, len) do {\
+	void *raddr = addr; size_t rlen = len;\
+	if (pmem_is_pmem(raddr, rlen)) \
+		pmem_persist(raddr, rlen);\
+	else\
+		pmem_msync(raddr, rlen);\
+} while (0)
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,14 +38,15 @@
 #include <stdlib.h>
 #include <libgen.h>
 #include <string.h>
-#include <sys/queue.h>
 #include <inttypes.h>
 #include <err.h>
+
 #include "common.h"
 #include "output.h"
 #include <libpmemlog.h>
 #include <libpmemblk.h>
 #include "mmap.h"
+#include "queue.h"
 
 /*
  * pmemwrite -- context and arguments

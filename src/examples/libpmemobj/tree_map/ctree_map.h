@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,8 +47,8 @@ struct ctree_map;
 TOID_DECLARE(struct ctree_map, CTREE_MAP_TYPE_OFFSET + 0);
 
 int ctree_map_check(PMEMobjpool *pop, TOID(struct ctree_map) map);
-int ctree_map_new(PMEMobjpool *pop, TOID(struct ctree_map) *map, void *arg);
-int ctree_map_delete(PMEMobjpool *pop, TOID(struct ctree_map) *map);
+int ctree_map_create(PMEMobjpool *pop, TOID(struct ctree_map) *map, void *arg);
+int ctree_map_destroy(PMEMobjpool *pop, TOID(struct ctree_map) *map);
 int ctree_map_insert(PMEMobjpool *pop, TOID(struct ctree_map) map,
 	uint64_t key, PMEMoid value);
 int ctree_map_insert_new(PMEMobjpool *pop, TOID(struct ctree_map) map,

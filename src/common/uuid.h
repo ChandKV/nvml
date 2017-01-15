@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,6 +38,7 @@
 #define NVML_UUID_H 1
 
 #include <stdint.h>
+#include <string.h>
 
 /*
  * Structure for binary version of uuid. From RFC4122,
@@ -59,8 +60,17 @@ struct uuid {
 typedef unsigned char uuid_t[POOL_HDR_UUID_LEN]; /* 16 byte binary uuid value */
 
 int util_uuid_generate(uuid_t uuid);
-int util_uuid_to_string(uuid_t u, char *buf);
+int util_uuid_to_string(const uuid_t u, char *buf);
 int util_uuid_from_string(const char uuid[POOL_HDR_UUID_STR_LEN],
 	struct uuid *ud);
+
+/*
+ * uuidcmp -- compare two uuids
+ */
+static inline int
+uuidcmp(const uuid_t uuid1, const uuid_t uuid2)
+{
+	return memcmp(uuid1, uuid2, POOL_HDR_UUID_LEN);
+}
 
 #endif

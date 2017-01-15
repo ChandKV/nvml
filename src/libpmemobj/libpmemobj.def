@@ -1,6 +1,6 @@
 ;;;; Begin Copyright Notice
 ;
-; Copyright 2015-2016, Intel Corporation
+; Copyright 2015-2017, Intel Corporation
 ;
 ; Redistribution and use in source and binary forms, with or without
 ; modification, are permitted provided that the following conditions
@@ -90,6 +90,9 @@ EXPORTS
 	pmemobj_tx_add_range
 	pmemobj_tx_add_range_direct
 	pmemobj_tx_alloc
+	pmemobj_tx_xadd_range
+	pmemobj_tx_xadd_range_direct
+	pmemobj_tx_xalloc
 	pmemobj_tx_zalloc
 	pmemobj_tx_realloc
 	pmemobj_tx_zrealloc
@@ -103,5 +106,6 @@ EXPORTS
 	pmemobj_flush
 	pmemobj_drain
 	pmemobj_direct
+	pmemobj_oid
 	_pobj_debug_notice
 	DllMain

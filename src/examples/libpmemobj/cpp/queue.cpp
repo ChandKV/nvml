@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,6 +36,7 @@
  * Please see pmem.io blog posts for more details.
  */
 
+#include <ex_common.h>
 #include <iostream>
 #include <libpmemobj++/make_persistent.hpp>
 #include <libpmemobj++/p.hpp>
@@ -48,7 +49,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 #define LAYOUT "queue"
 
@@ -158,7 +158,7 @@ public:
 	 * Prints the entire contents of the queue.
 	 */
 	void
-	show(void)
+	show(void) const
 	{
 		for (auto n = head; n != nullptr; n = n->next)
 			std::cout << n->value << std::endl;
@@ -186,9 +186,9 @@ main(int argc, char *argv[])
 
 	pool<examples::pmem_queue> pop;
 
-	if (access(path, F_OK) != 0) {
+	if (file_exists(path) != 0) {
 		pop = pool<examples::pmem_queue>::create(
-			path, LAYOUT, PMEMOBJ_MIN_POOL, S_IRWXU);
+			path, LAYOUT, PMEMOBJ_MIN_POOL, CREATE_MODE_RW);
 	} else {
 		pop = pool<examples::pmem_queue>::open(path, LAYOUT);
 	}

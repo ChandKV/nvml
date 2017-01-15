@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  * Copyright (c) 2016, Microsoft Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,14 @@
 
 #pragma warning(disable : 4996)
 
-#define _CRT_RAND_S
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Prevent NVML compilation for 32-bit platforms */
+#if defined(_WIN32) && !defined(_WIN64)
+#error "32-bit builds of NVML are not supported!"
+#endif
 
 /*
  * Define off_t before windows.h is included!
@@ -53,9 +60,11 @@
 typedef long long off_t;	/* use 64-bit off_t */
 typedef long _off_t;		/* NOTE: _off_t must be defined as 'long'! */
 #define _OFF_T_DEFINED
+#define _CRT_RAND_S		/* rand_s() */
 
 #include <windows.h>
 #include <stdint.h>
+#include <time.h>
 #include <io.h>
 #include <process.h>
 #include <fcntl.h>
@@ -63,6 +72,7 @@ typedef long _off_t;		/* NOTE: _off_t must be defined as 'long'! */
 #include <malloc.h>
 #include <signal.h>
 #include <intrin.h>
+#include <direct.h>
 
 /* use uuid_t definition from util.h */
 #ifdef uuid_t
@@ -73,7 +83,9 @@ typedef long _off_t;		/* NOTE: _off_t must be defined as 'long'! */
 #define PATH_MAX MAX_PATH
 #define __thread __declspec(thread)
 #define __func__ __FUNCTION__
-#define __typeof__ decltype
+#ifdef _DEBUG
+#define DEBUG
+#endif
 
 /*
  * The inline keyword is available only in VC++.
@@ -130,6 +142,12 @@ __sync_fetch_and_add(volatile uint32_t *a, uint32_t val)
 	return InterlockedExchangeAdd(a, val);
 }
 
+__inline uint64_t
+__sync_fetch_and_add64(volatile uint64_t *a, uint64_t val)
+{
+	return InterlockedExchangeAdd64((LONG64 *)a, (LONG64)val);
+}
+
 __inline void
 __sync_synchronize()
 {
@@ -146,6 +164,10 @@ __sync_synchronize()
 /* sys/stat.h */
 #define S_IRUSR S_IREAD
 #define S_IWUSR S_IWRITE
+#define S_IRGRP S_IRUSR
+#define S_IWGRP S_IWUSR
+
+#define O_SYNC 0
 
 typedef int mode_t;
 
@@ -157,6 +179,9 @@ typedef long long ssize_t;
 
 /* stdlib.h */
 int mkstemp(char *temp);
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);
+int rand_r(unsigned *seedp);
 
 /* fcntl.h */
 int posix_fallocate(int fd, off_t offset, off_t size);
@@ -166,6 +191,12 @@ int posix_fallocate(int fd, off_t offset, off_t size);
 
 const char *strsignal(int sig);
 extern const char * const sys_siglist[];
+
+/* time.h */
+#define CLOCK_MONOTONIC 1
+#define CLOCK_REALTIME 2
+
+int clock_gettime(int id, struct timespec *ts);
 
 /* signal.h */
 typedef unsigned long long sigset_t; /* one bit for each signal */
@@ -245,22 +276,14 @@ void func(void); \
 __pragma(comment(linker, "/include:_" #func)) \
 __pragma(section(".CRT$XCU", read)) \
 __declspec(allocate(".CRT$XCU")) \
-const void (WINAPI *_##func)(void) = func;
+const void (WINAPI *_##func)(void) = (const void (WINAPI *)(void))func;
 
 #define MSVC_DESTR(func) \
 void func(void); \
 static void _##func##_reg(void) { atexit(func); }; \
 MSVC_CONSTR(_##func##_reg)
 
-/*
- * If multi-threaded version of CRT is used (which should be the
- * case always now-a-days), we can define the thread safe version
- * of few CRT functions to be their regular versions, if an explicit
- * thread safe version is not available in windows.
- */
-
-#ifdef _MT
-#define rand_r rand_s
-#endif /* _MT */
-
+#ifdef __cplusplus
+}
+#endif
 #endif /* PLATFORM_H */

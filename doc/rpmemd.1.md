@@ -3,7 +3,7 @@ layout: manual
 Content-Style: 'text/css'
 title: rpmemd(1)
 header: NVM Library
-date: version 1.0.1
+date: version 1.0.2
 ...
 
 [comment]: <> (Copyright 2016, Intel Corporation)
@@ -101,6 +101,14 @@ and **--use-syslog** should not be followed by any value. Presence of each of th
 in the command line turns on an appropriate option.
 See **CONFIGURATION FILES** section for details.
 
+`-r, --remove <poolset>`
+
+Remove a pool described by given pool set file descriptor. It is interpreted
+as a path to the pool set file relative to the pool set directory.
+
+`-f, --force`
+
+Ignore errors when removing a pool file using **--remove** option.
 
 # CONFIGURATION FILES #
 
@@ -145,7 +153,7 @@ The allowed options are:
   + **info** - informational message
   + **debug** - debug-level message
 
-The **$HOME** substring in the *poolset-dir* path is replaced with the current user
+The **$HOME** sub-string in the *poolset-dir* path is replaced with the current user
 home directory.
 
 

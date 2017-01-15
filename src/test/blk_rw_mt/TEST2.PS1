@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 # Copyright (c) 2016, Microsoft Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -39,11 +39,7 @@ Param(
     )
 $Env:UNITTEST_NAME = "blk_rw_mt\TEST2"
 $Env:UNITTEST_NUM = "2"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 # standard unit test setup
 . ..\unittest\unittest.ps1
@@ -56,13 +52,14 @@ require_fs_type pmem non-pmem
 
 setup
 
+# limit number of emitted logs due to excessive log size
+$Env:PMEMBLK_LOG_LEVEL=2
+
 create_holey_file 1G $DIR\testfile1
 # 300 threads, each doing 100000 random I/Os
 expect_normal_exit $Env:EXE_DIR\blk_rw_mt$Env:EXESUFFIX 4096 $DIR/testfile1 789 300 100000
 
-# XXX:  check_pool for windows is not implemented uncomment
-# the below line when it's available.
-# check_pool $DIR\testfile1
+check_pool $DIR\testfile1
 
 check
 

@@ -43,11 +43,13 @@ export UNITTEST_NUM=1
 # standard unit test setup
 . ../unittest/unittest.sh
 
+require_test_type medium
+
 require_fs_type any
 
 setup
 
-expect_normal_exit ./vmem_pages_purging$EXESUFFIX -z $DIR
+expect_normal_exit ./vmem_pages_purging$EXESUFFIX z $DIR
 
 check
 

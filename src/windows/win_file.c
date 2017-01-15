@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -51,9 +51,12 @@
  */
 
 #include <windows.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <Shlwapi.h>
+#include <stdio.h>
+#include <pmemcompat.h>
 
 /*
  * mkstemp -- generate a unique temporary filename from template
@@ -61,12 +64,32 @@
 int
 mkstemp(char *temp)
 {
-	/* XXX - limited number of unique file names */
+	unsigned rnd;
 	char *path = _mktemp(temp);
+
 	if (path == NULL)
 		return -1;
 
-	return open(path, O_RDWR | O_CREAT | O_EXCL, S_IWRITE | S_IREAD);
+	char npath[MAX_PATH];
+	strcpy(npath, path);
+
+	/*
+	 * Use rand_s to generate more unique tmp file name than _mktemp do.
+	 * In case with multiple threads and multiple files even after close()
+	 * file name conflicts occurred.
+	 * It resolved issue with synchronous removing
+	 * multiples files by system.
+	 */
+	rand_s(&rnd);
+	_snprintf(npath + strlen(npath), MAX_PATH, "%d", rnd);
+
+	/*
+	 * Use O_TEMPORARY flag to make sure the file is deleted when
+	 * the last file descriptor is closed.  Also, it prevents opening
+	 * this file from another process.
+	 */
+	return open(npath, O_RDWR | O_CREAT | O_EXCL | O_TEMPORARY,
+		S_IWRITE | S_IREAD);
 }
 
 /*
@@ -86,6 +109,15 @@ posix_fallocate(int fd, off_t offset, off_t size)
 		return 0;
 
 	return _chsize_s(fd, size);
+}
+
+/*
+ * ftruncate -- truncate a file to a specified length
+ */
+int
+ftruncate(int fd, off_t length)
+{
+	return _chsize_s(fd, length);
 }
 
 /*
@@ -130,4 +162,46 @@ flock(int fd, int operation)
 		errno = EWOULDBLOCK; /* for consistency with flock() */
 
 	return res;
+}
+
+/*
+ * writev -- windows version of writev function
+ *
+ * XXX: _write and other similar functions are 32 bit on windows
+ *	if size of data is bigger then 2^32, this function
+ *	will be not atomic.
+ */
+ssize_t
+writev(int fd, const struct iovec *iov, int iovcnt)
+{
+	size_t size = 0;
+
+	/* XXX: _write is 32 bit on windows */
+	for (int i = 0; i < iovcnt; i++)
+		size += iov[i].iov_len;
+
+	void *buf = malloc(size);
+	if (buf == NULL)
+		return ENOMEM;
+
+	char *it_buf = buf;
+	for (int i = 0; i < iovcnt; i++) {
+		memcpy(it_buf, iov[i].iov_base, iov[i].iov_len);
+		it_buf += iov[i].iov_len;
+	}
+
+	ssize_t written = 0;
+	while (size > 0) {
+		int ret = _write(fd, buf, size >= MAXUINT ?
+				MAXUINT : (unsigned) size);
+		if (ret == -1) {
+			written = -1;
+			break;
+		}
+		written += ret;
+		size -= ret;
+	}
+
+	free(buf);
+	return written;
 }

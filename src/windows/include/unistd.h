@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -128,13 +128,6 @@ dirname(char *path)
 	return path;
 }
 
-/*
- * ftruncate -- truncate a file to a specified length
- */
-static int
-ftruncate(int fd, off_t length)
-{
-	return _chsize_s(fd, length);
-}
+int ftruncate(int fd, off_t length);
 
 #endif /* UNISTD_H */

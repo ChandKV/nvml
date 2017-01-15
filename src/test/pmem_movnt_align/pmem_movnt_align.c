@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -93,13 +93,14 @@ check_memcpy(void *dest, void *src, size_t len)
 static void
 check_memset(void *dest, size_t len)
 {
-	char buff[len];
+	char *buff = malloc(sizeof(char) * len);
 	memset(buff, 1, len);
 
 	pmem_memset_persist(dest, 1, len);
 
 	if (memcmp(dest, buff, len))
 		UT_FATAL("memset failed");
+	free(buff);
 }
 
 int

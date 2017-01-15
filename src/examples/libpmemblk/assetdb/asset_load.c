@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -40,10 +40,10 @@
  * The asset-file should contain the names of the assets, one per line.
  */
 
+#include <ex_common.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
 #include <time.h>
@@ -55,11 +55,11 @@ int
 main(int argc, char *argv[])
 {
 	FILE *fp;
-	size_t len;
+	int len = ASSET_NAME_MAX;
 	PMEMblkpool *pbp;
 	int assetid = 0;
 	size_t nelements;
-	char *line = NULL;
+	char *line;
 
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s assetdb assetlist\n", argv[0]);
@@ -70,8 +70,10 @@ main(int argc, char *argv[])
 	const char *path_list = argv[2];
 
 	/* create pmemblk pool in existing (but as yet unmodified) file */
-	if ((pbp = pmemblk_create(path_pool,
-			sizeof(struct asset), 0, S_IWUSR | S_IRUSR)) == NULL) {
+	pbp = pmemblk_create(path_pool, sizeof(struct asset),
+			0, CREATE_MODE_RW);
+
+	if (pbp == NULL) {
 		perror(path_pool);
 		exit(1);
 	}
@@ -88,7 +90,12 @@ main(int argc, char *argv[])
 	 * array, if a name of the asset is longer than ASSET_NAME_SIZE_MAX,
 	 * truncate it.
 	 */
-	while (getline(&line, &len, fp) != -1) {
+	line = malloc(len);
+	if (line == NULL) {
+		perror("malloc");
+		exit(1);
+	}
+	while (fgets(line, len, fp) != NULL) {
 		struct asset asset;
 
 		if (assetid >= nelements) {

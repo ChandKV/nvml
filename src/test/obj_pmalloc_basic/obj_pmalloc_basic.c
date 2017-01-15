@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -52,12 +52,10 @@
 #define MAX_MALLOC_FREE_LOOP 1000
 #define MALLOC_FREE_SIZE 8000
 
-#define ALIGN_CEILING(addr, alignment)\
-	(((addr) + (alignment - 1)) & ~(alignment - 1))
-
 struct mock_pop {
 	PMEMobjpool p;
 	char lanes[LANE_SECTION_LEN * MAX_LANE_SECTION];
+	char padding[1024]; /* to page boundary */
 	uint64_t ptr;
 };
 
@@ -117,7 +115,7 @@ static void *
 obj_memset(void *ctx, void *ptr, int c, size_t sz)
 {
 	memset(ptr, c, sz);
-	pmem_msync(ptr, sz);
+	UT_ASSERTeq(pmem_msync(ptr, sz), 0);
 	return ptr;
 }
 
@@ -180,16 +178,14 @@ redo_log_check_offset(void *ctx, uint64_t offset)
 static void
 test_mock_pool_allocs()
 {
-	void *real_address = ZALLOC(MOCK_POOL_SIZE * 2);
-	addr = (void *)ALIGN_CEILING((uint64_t)real_address,
-		(uint64_t)Ut_pagesize);
+	addr = MMAP_ANON_ALIGNED(MOCK_POOL_SIZE, Ut_mmap_align);
 	mock_pop = &addr->p;
 	mock_pop->addr = addr;
 	mock_pop->size = MOCK_POOL_SIZE;
 	mock_pop->rdonly = 0;
 	mock_pop->is_pmem = 0;
-	mock_pop->heap_offset =
-		ALIGN_CEILING(sizeof(struct mock_pop), Ut_pagesize);
+	mock_pop->heap_offset = offsetof(struct mock_pop, ptr);
+	UT_ASSERTeq(mock_pop->heap_offset % Ut_pagesize, 0);
 	mock_pop->heap_size = MOCK_POOL_SIZE - mock_pop->heap_offset;
 	mock_pop->nlanes = 1;
 	mock_pop->lanes_offset = sizeof(PMEMobjpool);
@@ -216,6 +212,7 @@ test_mock_pool_allocs()
 	heap_init(heap_start, heap_size, &mock_pop->p_ops);
 	heap_boot(&mock_pop->heap, heap_start, heap_size, mock_pop,
 			&mock_pop->p_ops);
+	heap_buckets_init(&mock_pop->heap);
 
 	/* initialize runtime lanes structure */
 	mock_pop->lanes_desc.runtime_nlanes = (unsigned)mock_pop->nlanes;
@@ -241,7 +238,7 @@ test_mock_pool_allocs()
 	lane_cleanup(mock_pop);
 	heap_cleanup(&mock_pop->heap);
 
-	FREE(real_address);
+	MUNMAP_ANON_ALIGNED(addr, MOCK_POOL_SIZE);
 }
 
 static void
@@ -252,6 +249,8 @@ test_spec_compliance()
 		sizeof(struct oob_header);
 
 	UT_ASSERTeq(max_alloc, PMEMOBJ_MAX_ALLOC_SIZE);
+	UT_COMPILE_ERROR_ON(offsetof(struct chunk_run, data) <
+		MAX_CACHELINE_ALIGNMENT);
 }
 
 int

@@ -177,7 +177,7 @@ btt_data_write(PMEMpoolcheck *ppc, union location *loc)
 
 	TAILQ_FOREACH(arenap, &ppc->pool->arenas, next) {
 
-		if (ppc->pool->uuid_op == UUID_REGENERATED) {
+		if (ppc->pool->uuid_op == UUID_NOT_FROM_BTT) {
 			memcpy(arenap->btt_info.parent_uuid,
 				ppc->pool->hdr.pool.poolset_uuid,
 					sizeof(arenap->btt_info.parent_uuid));
@@ -248,6 +248,8 @@ static const struct step steps[] = {
 static inline int
 step_exe(PMEMpoolcheck *ppc, union location *loc)
 {
+	ASSERT(loc->step < ARRAY_SIZE(steps));
+
 	const struct step *step = &steps[loc->step++];
 
 	/* check step conditions */
@@ -265,6 +267,14 @@ check_write(PMEMpoolcheck *ppc)
 {
 	COMPILE_ERROR_ON(sizeof(union location) !=
 		sizeof(struct check_step_data));
+
+	/*
+	 * XXX: Disabling individual checks based on type should be done in the
+	 *	step structure. This however requires refactor of the step
+	 *	processing code.
+	 */
+	if (CHECK_IS_NOT(ppc, REPAIR))
+		return;
 
 	union location *loc = (union location *)check_get_step_data(ppc->data);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,11 +35,12 @@
  */
 
 #include <errno.h>
-#include <sys/queue.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <string.h>
+#include <float.h>
 
+#include "queue.h"
 #include "heap.h"
 #include "out.h"
 #include "util.h"
@@ -66,8 +67,6 @@
  * combined.
  */
 #define MAX_UNITS_PCT_DRAINED_TOTAL 2 /* 200% */
-
-#define BIT_IS_CLR(a, i)	(!((a) & (1ULL << (i))))
 
 /*
  * Value used to mark a reserved spot in the bucket array.
@@ -438,36 +437,33 @@ heap_create_run(struct palloc_heap *heap, struct bucket *b,
 
 /*
  * heap_reuse_run -- (internal) reuses existing run
+ *
+ * The lock on this run must be held by the caller.
  */
 static void
 heap_reuse_run(struct palloc_heap *heap, struct bucket *b,
 	uint32_t chunk_id, uint32_t zone_id)
 {
-	util_mutex_lock(heap_get_run_lock(heap, chunk_id));
-
 	struct zone *z = ZID_TO_ZONE(heap->layout, zone_id);
 	struct chunk_header *hdr = &z->chunk_headers[chunk_id];
 	struct chunk_run *run = (struct chunk_run *)&z->chunks[chunk_id];
 
 	/* the run might have changed back to a chunk */
 	if (hdr->type != CHUNK_TYPE_RUN)
-		goto out;
+		return;
 
 	/*
 	 * Between the call to this function and this moment a different
 	 * thread might have already claimed this run.
 	 */
 	if (run->bucket_vptr != 0)
-		goto out;
+		return;
 
 	heap_set_run_bucket(run, b);
 	ASSERTeq(hdr->size_idx, 1);
 	ASSERTeq(b->unit_size, run->block_size);
 
 	heap_process_run_metadata(heap, b, run, chunk_id, zone_id);
-
-out:
-	util_mutex_unlock(heap_get_run_lock(heap, chunk_id));
 }
 
 /*
@@ -718,8 +714,12 @@ static int
 heap_ensure_bucket_filled(struct palloc_heap *heap, struct bucket *b)
 {
 	if (b->type == BUCKET_HUGE) {
+		util_mutex_lock(&b->lock);
 		/* not much to do here apart from using the next zone */
-		return heap_populate_buckets(heap);
+		int ret = heap_populate_buckets(heap);
+		util_mutex_unlock(&b->lock);
+
+		return ret;
 	}
 
 	struct heap_rt *h = heap->rt;
@@ -734,9 +734,20 @@ heap_ensure_bucket_filled(struct palloc_heap *heap, struct bucket *b)
 
 		ASSERT(m.block_off == 0);
 
+		/*
+		 * The default bucket is still the owner of the chunk, up to the
+		 * moment that the chunk type is changed to run. This lock is
+		 * especially important in the free code path when we are
+		 * searching for neighbour blocks in blocks list.
+		 */
+		util_mutex_lock(&def_bucket->lock);
 		heap_create_run(heap, b, m.chunk_id, m.zone_id);
+		util_mutex_unlock(&def_bucket->lock);
 	} else {
+		pthread_mutex_t *lock = heap_get_run_lock(heap, m.chunk_id);
+		util_mutex_lock(lock);
 		heap_reuse_run(heap, b, m.chunk_id, m.zone_id);
+		util_mutex_unlock(lock);
 	}
 
 	return 0;
@@ -822,6 +833,7 @@ heap_assign_run_bucket(struct palloc_heap *heap, struct chunk_run *run,
 
 	struct bucket *b = heap_get_bucket_by_idx(heap->rt, bucket_idx);
 
+	/* this entire function is called with an acquired lock on the run */
 	heap_reuse_run(heap, b, chunk_id, zone_id);
 
 	/* different thread might have used this run, hence this get */
@@ -1005,7 +1017,7 @@ static uint8_t
 heap_find_min_frag_alloc_class(struct palloc_heap *h, size_t n)
 {
 	uint8_t best_bucket = MAX_BUCKETS;
-	size_t best_frag = SIZE_MAX;
+	float best_frag = FLT_MAX;
 	/*
 	 * Start from the largest buckets in order to minimize unit size of
 	 * allocated memory blocks.
@@ -1016,16 +1028,16 @@ heap_find_min_frag_alloc_class(struct palloc_heap *h, size_t n)
 
 		struct bucket_run *run = (struct bucket_run *)h->rt->buckets[i];
 
-		size_t frag = n % run->super.unit_size;
-
+		size_t units = run->super.calc_units((struct bucket *)run, n);
 		/* can't exceed the maximum allowed run unit max */
-		if (run->super.calc_units((struct bucket *)run, n) >
-			run->unit_max_alloc)
+		if (units > run->unit_max_alloc)
 			break;
 
-		if (frag == 0)
+		float frag = (float)(run->super.unit_size * units) / (float)n;
+		if (frag == 1.f)
 			return (uint8_t)i;
 
+		ASSERT(frag >= 1.f);
 		if (frag < best_frag) {
 			best_bucket = (uint8_t)i;
 			best_frag = frag;
@@ -1039,7 +1051,7 @@ heap_find_min_frag_alloc_class(struct palloc_heap *h, size_t n)
 /*
  * heap_buckets_init -- (internal) initializes bucket instances
  */
-static int
+int
 heap_buckets_init(struct palloc_heap *heap)
 {
 	struct heap_rt *h = heap->rt;
@@ -1215,9 +1227,11 @@ heap_get_bestfit_block(struct palloc_heap *heap, struct bucket *b,
 	int ret = 0;
 
 	while (CNT_OP(b, get_rm_bestfit, m) != 0) {
+		util_mutex_unlock(&b->lock);
 		if ((ret = heap_ensure_bucket_filled(heap, b)) != 0) {
-			goto out;
+			return ret;
 		}
+		util_mutex_lock(&b->lock);
 	}
 
 	ASSERT(m->size_idx >= units);
@@ -1225,10 +1239,9 @@ heap_get_bestfit_block(struct palloc_heap *heap, struct bucket *b,
 	if (units != m->size_idx)
 		heap_recycle_block(heap, b, m, units);
 
-out:
 	util_mutex_unlock(&b->lock);
 
-	return ret;
+	return 0;
 }
 
 /*
@@ -1273,41 +1286,6 @@ heap_get_block_data(struct palloc_heap *heap, struct memory_block m)
 
 	return (char *)&run->data + (run->block_size * m.block_off);
 }
-
-#ifdef DEBUG
-/*
- * heap_block_is_allocated -- checks whether the memory block is allocated
- */
-int
-heap_block_is_allocated(struct palloc_heap *heap, struct memory_block m)
-{
-	struct zone *z = ZID_TO_ZONE(heap->layout, m.zone_id);
-	struct chunk_header *hdr = &z->chunk_headers[m.chunk_id];
-
-	if (hdr->type == CHUNK_TYPE_USED)
-		return 1;
-
-	if (hdr->type == CHUNK_TYPE_FREE)
-		return 0;
-
-	ASSERTeq(hdr->type, CHUNK_TYPE_RUN);
-
-	struct chunk_run *r = (struct chunk_run *)&z->chunks[m.chunk_id];
-
-	unsigned v = m.block_off / BITS_PER_VALUE;
-	uint64_t bitmap = r->bitmap[v];
-	unsigned b = m.block_off % BITS_PER_VALUE;
-
-	unsigned b_last = b + m.size_idx;
-	ASSERT(b_last <= BITS_PER_VALUE);
-
-	for (unsigned i = b; i < b_last; ++i)
-		if (!BIT_IS_CLR(bitmap, i))
-			return 1;
-
-	return 0;
-}
-#endif /* DEBUG */
 
 /*
  * heap_run_get_block -- (internal) returns next/prev memory block from run
@@ -1409,12 +1387,11 @@ int heap_get_adjacent_free_block(struct palloc_heap *heap, struct bucket *b,
 }
 
 /*
- * heap_coalesce -- merges adjacent memory blocks
+ * heap_coalesce -- (internal) merges adjacent memory blocks
  */
-struct memory_block
+static struct memory_block
 heap_coalesce(struct palloc_heap *heap,
-	struct memory_block *blocks[], int n, enum memblock_hdr_op op,
-	struct operation_context *ctx)
+	struct memory_block *blocks[], int n, struct operation_context *ctx)
 {
 	struct memory_block ret;
 	struct memory_block *b = NULL;
@@ -1437,7 +1414,8 @@ heap_coalesce(struct palloc_heap *heap,
 	 * have to worry about difference of persistent/volatile states.
 	 */
 	if (ctx != NULL)
-		MEMBLOCK_OPS(AUTO, &ret)->prep_hdr(&ret, heap, op, ctx);
+		MEMBLOCK_OPS(AUTO, &ret)->prep_hdr(&ret, heap,
+			MEMBLOCK_FREE, ctx);
 
 	return ret;
 }
@@ -1463,8 +1441,7 @@ heap_free_block(struct palloc_heap *heap, struct bucket *b,
 		blocks[2] = &next;
 	}
 
-	struct memory_block res = heap_coalesce(heap, blocks, 3, HDR_OP_FREE,
-		ctx);
+	struct memory_block res = heap_coalesce(heap, blocks, 3, ctx);
 
 	return res;
 }
@@ -1484,6 +1461,11 @@ traverse_bucket_run(struct bucket *b, struct memory_block m,
 	uint32_t size_idx_sum = 0;
 
 	while (size_idx_sum != r->bitmap_nallocs) {
+		if (m.block_off + r->unit_max > r->bitmap_nallocs)
+			m.size_idx = r->bitmap_nallocs - m.block_off;
+		else
+			m.size_idx = r->unit_max;
+
 		if (cb(b->container, m) != 0)
 			return 1;
 
@@ -1491,10 +1473,6 @@ traverse_bucket_run(struct bucket *b, struct memory_block m,
 
 		ASSERT((uint32_t)m.block_off + r->unit_max <= UINT16_MAX);
 		m.block_off = (uint16_t)(m.block_off + r->unit_max);
-		if (m.block_off + r->unit_max > r->bitmap_nallocs)
-			m.size_idx = r->bitmap_nallocs - m.block_off;
-		else
-			m.size_idx = r->unit_max;
 	}
 
 	return 0;
@@ -1525,7 +1503,6 @@ heap_degrade_run_if_empty(struct palloc_heap *heap,
 	ctx.p_ops = &heap->p_ops;
 
 	util_mutex_lock(&b->lock);
-	MEMBLOCK_OPS(RUN, &m)->lock(&m, heap);
 
 	unsigned i;
 	unsigned nval = r->bitmap_nval;
@@ -1564,7 +1541,6 @@ heap_degrade_run_if_empty(struct palloc_heap *heap,
 	util_mutex_unlock(&defb->lock);
 
 out:
-	MEMBLOCK_OPS(RUN, &m)->unlock(&m, heap);
 	util_mutex_unlock(&b->lock);
 }
 
@@ -1631,16 +1607,8 @@ heap_boot(struct palloc_heap *heap, void *heap_start, uint64_t heap_size,
 
 	util_mutex_init(&h->active_run_lock, NULL);
 
-	pthread_mutexattr_t lock_attr;
-	if ((err = pthread_mutexattr_init(&lock_attr)) != 0)
-		FATAL("!pthread_mutexattr_init");
-
-	if ((err = pthread_mutexattr_settype(
-			&lock_attr, PTHREAD_MUTEX_RECURSIVE)) != 0)
-		FATAL("!pthread_mutexattr_settype");
-
 	for (int i = 0; i < MAX_RUN_LOCKS; ++i)
-		util_mutex_init(&h->run_locks[i], &lock_attr);
+		util_mutex_init(&h->run_locks[i], NULL);
 
 	memset(h->last_drained, 0, sizeof(h->last_drained));
 
@@ -1656,16 +1624,8 @@ heap_boot(struct palloc_heap *heap, void *heap_start, uint64_t heap_size,
 	for (unsigned i = 0; i < h->ncaches; ++i)
 		bucket_group_init(h->caches[i].buckets);
 
-	if ((err = heap_buckets_init(heap)) != 0)
-		goto error_buckets_init;
-
-	pthread_mutexattr_destroy(&lock_attr);
 	return 0;
 
-error_buckets_init:
-	pthread_mutexattr_destroy(&lock_attr);
-	/* there's really no point in destroying the locks */
-	Free(h->caches);
 error_heap_cache_malloc:
 	Free(h);
 	heap->rt = NULL;
@@ -1693,62 +1653,6 @@ heap_write_header(struct heap_header *hdr, size_t size)
 	util_checksum(&newhdr, sizeof(newhdr), &newhdr.checksum, 1);
 	*hdr = newhdr;
 }
-
-#ifdef USE_VG_MEMCHECK
-/*
- * heap_vg_open -- notifies Valgrind about heap layout
- */
-void
-heap_vg_open(void *heap_start, uint64_t heap_size)
-{
-	VALGRIND_DO_MAKE_MEM_UNDEFINED(heap_start, heap_size);
-
-	struct heap_layout *layout = heap_start;
-
-	VALGRIND_DO_MAKE_MEM_DEFINED(&layout->header, sizeof(layout->header));
-
-	unsigned zones = heap_max_zone(heap_size);
-
-	for (unsigned i = 0; i < zones; ++i) {
-		struct zone *z = ZID_TO_ZONE(layout, i);
-		uint32_t chunks;
-
-		VALGRIND_DO_MAKE_MEM_DEFINED(&z->header, sizeof(z->header));
-
-		if (z->header.magic != ZONE_HEADER_MAGIC)
-			continue;
-
-		chunks = z->header.size_idx;
-
-		for (uint32_t c = 0; c < chunks; ) {
-			struct chunk_header *hdr = &z->chunk_headers[c];
-
-			VALGRIND_DO_MAKE_MEM_DEFINED(hdr, sizeof(*hdr));
-
-			if (hdr->type == CHUNK_TYPE_RUN) {
-				struct chunk_run *run =
-					(struct chunk_run *)&z->chunks[c];
-
-				VALGRIND_DO_MAKE_MEM_DEFINED(run,
-					sizeof(*run));
-			}
-
-			ASSERT(hdr->size_idx > 0);
-
-			/* mark unused chunk headers as not accessible */
-			VALGRIND_DO_MAKE_MEM_NOACCESS(&z->chunk_headers[c + 1],
-					(hdr->size_idx - 1) *
-					sizeof(struct chunk_header));
-
-			c += hdr->size_idx;
-		}
-
-		/* mark all unused chunk headers after last as not accessible */
-		VALGRIND_DO_MAKE_MEM_NOACCESS(&z->chunk_headers[chunks],
-			(MAX_CHUNK - chunks) * sizeof(struct chunk_header));
-	}
-}
-#endif
 
 /*
  * heap_init -- initializes the heap
@@ -2009,7 +1913,6 @@ heap_run_foreach_object(struct palloc_heap *heap, object_callback cb,
 	uint64_t unused_bits = RUN_BITMAP_SIZE - bitmap_nallocs;
 	uint64_t unused_values = unused_bits / BITS_PER_VALUE;
 	uint64_t bitmap_nval = MAX_BITMAP_VALUES - unused_values;
-	unused_bits -= unused_values * BITS_PER_VALUE;
 
 	struct allocation_header *alloc;
 
@@ -2028,10 +1931,10 @@ heap_run_foreach_object(struct palloc_heap *heap, object_callback cb,
 			if (!BIT_IS_CLR(v, j)) {
 				alloc = (struct allocation_header *)
 					(run->data + (block_off + j) * bs);
-				j += (alloc->size / bs);
 				if (cb(PMALLOC_PTR_TO_OFF(heap, alloc), arg)
 						!= 0)
 					return 1;
+				j += (alloc->size / bs);
 			} else {
 				++j;
 			}
@@ -2101,3 +2004,93 @@ heap_foreach_object(struct palloc_heap *heap, object_callback cb, void *arg,
 				ZID_TO_ZONE(layout, i), start) != 0)
 			break;
 }
+
+#ifdef USE_VG_MEMCHECK
+
+/*
+ * heap_vg_open_chunk -- (internal) notifies Valgrind about chunk layout
+ */
+static void
+heap_vg_open_chunk(struct palloc_heap *heap,
+	object_callback cb, void *arg, int objects,
+	struct zone *z, struct chunk_header *hdr, void *chunk)
+{
+	if (hdr->type == CHUNK_TYPE_RUN) {
+		struct chunk_run *run = chunk;
+
+		VALGRIND_DO_MAKE_MEM_NOACCESS(run, sizeof(*run));
+		VALGRIND_DO_MAKE_MEM_DEFINED(run,
+			sizeof(*run) - sizeof(run->data));
+
+		if (objects) {
+			int ret = heap_run_foreach_object(heap, cb, arg, run);
+			ASSERTeq(ret, 0);
+		}
+	} else {
+		void *addr = chunk;
+		size_t size = hdr->size_idx * CHUNKSIZE;
+		VALGRIND_DO_MAKE_MEM_NOACCESS(addr, size);
+
+		if (objects && hdr->type == CHUNK_TYPE_USED) {
+			struct allocation_header *alloc = addr;
+
+			VALGRIND_DO_MAKE_MEM_DEFINED(alloc, sizeof(*alloc));
+			size_t off = PMALLOC_PTR_TO_OFF(heap, alloc);
+
+			int ret = cb(off, arg);
+			ASSERTeq(ret, 0);
+		}
+	}
+}
+
+/*
+ * heap_vg_open -- notifies Valgrind about heap layout
+ */
+void
+heap_vg_open(struct palloc_heap *heap, object_callback cb,
+	void *arg, int objects)
+{
+	ASSERTne(cb, NULL);
+	VALGRIND_DO_MAKE_MEM_UNDEFINED(heap->layout, heap->size);
+
+	struct heap_layout *layout = heap->layout;
+
+	VALGRIND_DO_MAKE_MEM_DEFINED(&layout->header, sizeof(layout->header));
+
+	unsigned zones = heap_max_zone(heap->size);
+
+	for (unsigned i = 0; i < zones; ++i) {
+		struct zone *z = ZID_TO_ZONE(layout, i);
+		uint32_t chunks;
+
+		VALGRIND_DO_MAKE_MEM_DEFINED(&z->header, sizeof(z->header));
+
+		if (z->header.magic != ZONE_HEADER_MAGIC)
+			continue;
+
+		chunks = z->header.size_idx;
+
+		for (uint32_t c = 0; c < chunks; ) {
+			struct chunk_header *hdr = &z->chunk_headers[c];
+
+			VALGRIND_DO_MAKE_MEM_DEFINED(hdr, sizeof(*hdr));
+
+			heap_vg_open_chunk(heap, cb, arg, objects, z,
+					hdr, &z->chunks[c]);
+
+			ASSERT(hdr->size_idx > 0);
+
+			/* mark unused chunk headers as not accessible */
+			VALGRIND_DO_MAKE_MEM_NOACCESS(&z->chunk_headers[c + 1],
+					(hdr->size_idx - 1) *
+					sizeof(struct chunk_header));
+
+			c += hdr->size_idx;
+		}
+
+		/* mark all unused chunk headers after last as not accessible */
+		VALGRIND_DO_MAKE_MEM_NOACCESS(&z->chunk_headers[chunks],
+			(MAX_CHUNK - chunks) * sizeof(struct chunk_header));
+	}
+}
+#endif

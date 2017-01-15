@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -491,20 +491,34 @@ const char *
 out_get_checksum(void *addr, size_t len, uint64_t *csump)
 {
 	static char str_buff[STR_MAX] = {0, };
+
+	/*
+	 * The memory range can be mapped with PROT_READ, so allocate a new
+	 * buffer for the checksum and calculate there.
+	 */
+
+	void *buf = Malloc(len);
+	if (buf == NULL) {
+		snprintf(str_buff, STR_MAX, "failed");
+		return str_buff;
+	}
+	memcpy(buf, addr, len);
+	uint64_t *ncsump = (uint64_t *)
+		((char *)buf + ((char *)csump - (char *)addr));
+
 	uint64_t csum = *csump;
 
 	/* validate checksum and get correct one */
-	int valid = util_validate_checksum(addr, len, csump);
+	int valid = util_validate_checksum(buf, len, ncsump);
 
 	if (valid)
 		snprintf(str_buff, STR_MAX, "0x%jx [OK]", le64toh(csum));
 	else
 		snprintf(str_buff, STR_MAX,
 			"0x%jx [wrong! should be: 0x%jx]",
-			le64toh(csum), le64toh(*csump));
+			le64toh(csum), le64toh(*ncsump));
 
-	/* restore original checksum */
-	*csump = csum;
+	Free(buf);
 
 	return str_buff;
 }
@@ -715,7 +729,6 @@ const char *
 out_get_ei_class_str(uint8_t ei_class)
 {
 
-#ifndef _WIN32
 	switch (ei_class) {
 	case ELFCLASSNONE:
 		return "none";
@@ -726,10 +739,6 @@ out_get_ei_class_str(uint8_t ei_class)
 	default:
 		return "unknown";
 	}
-#else
-	return "none"; /* XXX - on windows ei_class is hardcoded to 0 */
-#endif
-
 }
 
 /*
@@ -738,7 +747,6 @@ out_get_ei_class_str(uint8_t ei_class)
 const char *
 out_get_ei_data_str(uint8_t ei_data)
 {
-#ifndef _WIN32
 	switch (ei_data) {
 	case ELFDATANONE:
 		return "none";
@@ -749,13 +757,6 @@ out_get_ei_data_str(uint8_t ei_data)
 	default:
 		return "unknown";
 	}
-#else
-	/*
-	 * XXX - on windows ei_data is hardcoded to 0 but we can assume little
-	 * endian architecture
-	 */
-	return "little endian";
-#endif
 }
 
 /*
@@ -766,10 +767,8 @@ out_get_e_machine_str(uint16_t e_machine)
 {
 	static char str_buff[STR_MAX] = {0, };
 	switch (e_machine) {
-#ifndef _WIN32 /* equivalent of EM_NONE not exist on Windows */
 	case EM_NONE:
 		return "none";
-#endif
 	case EM_X86_64:
 		return "AMD X86-64";
 	default:

@@ -35,6 +35,7 @@
 #
 TOP_SRC := $(dir $(lastword $(MAKEFILE_LIST)))..
 TOP := $(TOP_SRC)/..
+HEADERS = $(wildcard *.h) $(wildcard *.hpp)
 
 INCDIR = $(TOP_SRC)/include
 LIBDIR = $(TOP_SRC)/debug
@@ -44,7 +45,7 @@ include $(TOP)/src/common.inc
 CXXFLAGS = -std=c++11 -ggdb -Wall -Werror $(EXTRA_CXXFLAGS)
 CFLAGS = -std=gnu99 -ggdb -Wall -Werror $(EXTRA_CFLAGS)
 LDFLAGS = -Wl,-rpath=$(LIBDIR) -L$(LIBDIR) $(EXTRA_LDFLAGS)
-INCS = -I$(INCDIR) -I.
+INCS = -I$(INCDIR) -I. -I$(TOP_SRC)/examples
 
 LINKER=$(CC)
 ifeq ($(COMPILE_LANG), cpp)
@@ -92,15 +93,33 @@ ifneq ($(LIBRARIES),)
 endif
 
 clean-progs clean-libraries:
-	$(RM) *.o
+	$(RM) *.o $(TMP_HEADERS)
 
-.c.o:
+MAKEFILE_DEPS=Makefile $(TOP)/src/examples/Makefile.inc $(TOP)/src/common.inc
+
+ifneq ($(HEADERS),)
+ifneq ($(filter 1 2, $(CSTYLEON)),)
+TMP_HEADERS := $(addsuffix tmp, $(HEADERS))
+endif
+endif
+
+all: $(TMP_HEADERS)
+
+%.o: %.c $(MAKEFILE_DEPS)
+	$(call check-cstyle, $<)
 	$(CC) -c -o $@ $(CFLAGS) $(INCS) $<
 
-.cpp.o:
+%.o: %.cpp $(MAKEFILE_DEPS)
+	$(call check-cstyle, $<)
 	$(CXX) -c -o $@ $(CXXFLAGS) $(INCS) $<
 
-$(PROGS):
+%.htmp: %.h
+	$(call check-cstyle, $<, $@)
+
+%.hpptmp: %.hpp
+	$(call check-cstyle, $<, $@)
+
+$(PROGS): | $(TMP_HEADERS)
 	$(LINKER) -o $@ $(LDFLAGS) $^ $(LIBS)
 
 lib%.o:

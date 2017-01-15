@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,13 +39,11 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_create\TEST5w"
 $Env:UNITTEST_NUM = "5w"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
@@ -55,9 +53,9 @@ $POOL="$DIR\file.pool"
 $POOL2="$DIR\file2.pool"
 
 # PMEMBLK
-expect_abnormal_exit $PMEMPOOL$Env:EXESUFFIX create blk $POOL 2> err5w.log
+expect_abnormal_exit $PMEMPOOL create blk $POOL 2> err5w.log
 
-expect_abnormal_exit $PMEMPOOL$Env:EXESUFFIX create blk 4294967296 $POOL2 2>> err5w.log
+expect_abnormal_exit $PMEMPOOL create blk 4294967296 $POOL2 2>> err5w.log
 
 # XXX: checking output is not possible as powershell's error message layout
 # depends on terminal size.

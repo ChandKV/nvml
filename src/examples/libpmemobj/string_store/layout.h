@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,6 +39,6 @@
 #define MAX_BUF_LEN 10
 
 struct my_root {
-	int len;
+	size_t len;
 	char buf[MAX_BUF_LEN];
 };

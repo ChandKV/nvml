@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2016, Intel Corporation
+ * Copyright 2015-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -52,7 +52,7 @@ struct redo_log {
 	uint64_t value;
 };
 
-typedef int  (*redo_check_offset_fn)(void *ctx, uint64_t offset);
+typedef int (*redo_check_offset_fn)(void *ctx, uint64_t offset);
 
 struct redo_ctx *redo_log_config_new(void *base,
 		const struct pmem_ops *p_ops,

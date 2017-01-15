@@ -1,3 +1,4 @@
+*~
 *.swp
 *.o
 make.out
@@ -16,3 +17,6 @@ dpkg/
 *.user
 ~*
 *.db
+*.htmp
+*.hpptmp
+*.aps

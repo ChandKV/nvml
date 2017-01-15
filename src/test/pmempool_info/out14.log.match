@@ -1,3 +1,8 @@
+Part file:
+path                     : $(nW)file.pool
+type                     : regular file
+size                     : $(nW)
+
 POOL Header:
 Signature                : PMEMOBJ
 Major                    : $(*)
@@ -116,11 +121,15 @@ Lane:
    Offset                   : $(*)
 
     OOB Header:
-    Undo offset              : $(*)
     Type Number              : $(*)
   Undo Log - free          : 0 elements
   Undo Log - set           : 0 elements
   Undo Log - set cache     : 0 elements
+
+Part file:
+path                     : $(nW)file.pool
+type                     : regular file
+size                     : $(nW)
 
 POOL Header:
 Signature                : PMEMOBJ
@@ -164,6 +173,11 @@ Lane:
 
    Tx range cache:
     0000000000: Offset: $(*) Size: 1
+
+Part file:
+path                     : $(nW)file.pool
+type                     : regular file
+size                     : $(nW)
 
 POOL Header:
 Signature                : PMEMOBJ
@@ -210,6 +224,11 @@ Lane:
 
   Undo Log - set cache     : 0 elements
 
+Part file:
+path                     : $(nW)file.pool
+type                     : regular file
+size                     : $(nW)
+
 POOL Header:
 Signature                : PMEMOBJ
 Major                    : $(*)
@@ -249,7 +268,6 @@ Lane:
    Offset                   : $(*)
 
     OOB Header:
-    Undo offset              : $(*)
     Type Number              : 0x0000000000000001
   Undo Log - set           : 0 elements
   Undo Log - set cache     : 1 element
@@ -258,5 +276,4 @@ Lane:
    Offset                   : $(*)
 
     OOB Header:
-    Undo offset              : $(*)
     Type Number              : 0x0000000000000000

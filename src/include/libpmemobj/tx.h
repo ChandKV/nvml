@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2016, Intel Corporation
+ * Copyright 2014-2017, Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -65,7 +65,7 @@ extern "C" {
 		errno = pmemobj_tx_errno();\
 	} else {\
 		_pobj_errno = pmemobj_tx_begin(pop, _tx_env, __VA_ARGS__,\
-				TX_LOCK_NONE);\
+				TX_PARAM_NONE);\
 		if (_pobj_errno)\
 			errno = _pobj_errno;\
 	}\
@@ -73,10 +73,23 @@ extern "C" {
 		switch (_stage) {\
 			case TX_STAGE_WORK:
 
-#define TX_BEGIN_LOCK(pop, ...)\
+#define TX_BEGIN_PARAM(pop, ...)\
 _POBJ_TX_BEGIN(pop, ##__VA_ARGS__)
 
-#define TX_BEGIN(pop) _POBJ_TX_BEGIN(pop, TX_LOCK_NONE)
+#define TX_BEGIN_LOCK TX_BEGIN_PARAM
+
+/* Just to let compiler warn when incompatible function pointer is used */
+static inline pmemobj_tx_callback
+_pobj_validate_cb_sig(pmemobj_tx_callback cb)
+{
+	return cb;
+}
+
+/* EXPERIMENTAL */
+#define TX_BEGIN_CB(pop, cb, arg, ...) _POBJ_TX_BEGIN(pop, TX_PARAM_CB,\
+		_pobj_validate_cb_sig(cb), arg, ##__VA_ARGS__)
+
+#define TX_BEGIN(pop) _POBJ_TX_BEGIN(pop, TX_PARAM_NONE)
 
 #define TX_ONABORT\
 				pmemobj_tx_process();\
@@ -120,6 +133,23 @@ pmemobj_tx_add_range_direct(p, sizeof(*p))
 #define TX_ADD_FIELD_DIRECT(p, field)\
 pmemobj_tx_add_range_direct(&(p)->field, sizeof((p)->field))
 
+/* EXPERIMENTAL */
+#define TX_XADD(o, flags)\
+pmemobj_tx_xadd_range((o).oid, 0, sizeof(*(o)._type), flags)
+
+/* EXPERIMENTAL */
+#define TX_XADD_FIELD(o, field, flags)\
+pmemobj_tx_xadd_range((o).oid, TOID_OFFSETOF(o, field),\
+		sizeof(D_RO(o)->field), flags)
+
+/* EXPERIMENTAL */
+#define TX_XADD_DIRECT(p, flags)\
+pmemobj_tx_xadd_range_direct(p, sizeof(*p), flags)
+
+/* EXPERIMENTAL */
+#define TX_XADD_FIELD_DIRECT(p, field, flags)\
+pmemobj_tx_xadd_range_direct(&(p)->field, sizeof((p)->field), flags)
+
 
 #define TX_NEW(t)\
 ((TOID(t))pmemobj_tx_alloc(sizeof(t), TOID_TYPE_NUM(t)))
@@ -132,6 +162,10 @@ pmemobj_tx_add_range_direct(&(p)->field, sizeof((p)->field))
 
 #define TX_ZALLOC(t, size)\
 ((TOID(t))pmemobj_tx_zalloc(size, TOID_TYPE_NUM(t)))
+
+/* EXPERIMENTAL */
+#define TX_XALLOC(t, size, flags)\
+((TOID(t))pmemobj_tx_xalloc(size, TOID_TYPE_NUM(t), flags))
 
 /* XXX - not available when compiled with VC++ as C code (/TC) */
 #ifndef _MSC_VER

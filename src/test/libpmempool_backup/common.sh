@@ -89,6 +89,8 @@ function create_poolset_variation() {
 		;;
 	4)
 		# no poolset
+		# return without check_file
+		return
 		;;
 	5)
 		# empty
@@ -104,7 +106,7 @@ function create_poolset_variation() {
 		;;
 	esac
 
-	check_file $file
+	check_file $POOLSET$sfx
 }
 
 #
@@ -124,7 +126,7 @@ function backup_and_compare () {
 
 	# compare
 	if [ $# -gt 0 ]; then
-		compare_replicas $1 $poolset $poolset$BACKUP >> $DIFF
+		compare_replicas "$1" $poolset $poolset$BACKUP >> $DIFF
 	fi
 }
 

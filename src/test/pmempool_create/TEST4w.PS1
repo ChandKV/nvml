@@ -1,5 +1,5 @@
 #
-# Copyright 2014-2016, Intel Corporation
+# Copyright 2014-2017, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,40 +39,36 @@ Param(
     )
 $Env:UNITTEST_NAME = "pmempool_create\TEST4w"
 $Env:UNITTEST_NUM = "4w"
-# XXX:  bash has a few calls to tools that we don't have on
-# windows (yet) that set PMEM_IS_PMEM and NON_PMEM_IS_PMEM based
-# on their output
-$Env:PMEM_IS_PMEM = $true
-$Env:NON_PMEM_IS_PMEM = $true
+
 
 . ..\unittest\unittest.ps1
+
+require_test_type medium
 
 require_fs_type any
 
 setup
 
-#XXX: check_mode does not work correctly
-
 $POOL="$DIR\file.pool"
 # PMEMBLK
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -m 0600 blk 512 $POOL
+expect_normal_exit $PMEMPOOL create -m 0600 blk 512 $POOL
 check_file $POOL
 check_signature PMEMBLK $POOL
-#check_mode -a--- $POOL
+check_mode 0600 $POOL
 
 # PMEMLOG
 rm -Force $POOL
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -m 0500 log $POOL
+expect_normal_exit $PMEMPOOL create -m 0500 log $POOL
 check_file $POOL
 check_signature PMEMLOG $POOL
-#check_mode -ar-- $POOL
+check_mode 0500 $POOL
 
 # PMEMOBJ
 rm -Force $POOL
-expect_normal_exit $PMEMPOOL$Env:EXESUFFIX create -m 0500 --layout=LAYOUT_NAME obj $POOL
+expect_normal_exit $PMEMPOOL create -m 0500 --layout=LAYOUT_NAME obj $POOL
 check_file $POOL
 check_signature PMEMOBJ $POOL
 check_layout LAYOUT_NAME $POOL
-#check_mode -ar-- $POOL
+check_mode 0500 $POOL
 
 pass
