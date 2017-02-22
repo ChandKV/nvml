@@ -270,6 +270,18 @@ DWORD wmain(int argc, wchar_t *argv[])
             error = WriteToFile(L"BackTo-Utf8.txt", utf8Text, false);
         }
 
+        #if PrintDefaultChar
+        CPINFO cpInfo;
+        CHK(GetCPInfo(CP_UTF8, &cpInfo), L"GetCPInfo(CP_UTF8)");
+        wprintf(L"UTF8:\n"
+                L"  MaxCharSize: %d\n"
+                L"  DefaultChar: ",
+                cpInfo.MaxCharSize);
+        for (int i = 0; i < MAX_DEFAULTCHAR; i++) {
+            wprintf(L"%02x", cpInfo.DefaultChar[i]);
+        }
+        #endif // PrintDefaultChar
+
         error = ERROR_SUCCESS;
 
     } __finally {
