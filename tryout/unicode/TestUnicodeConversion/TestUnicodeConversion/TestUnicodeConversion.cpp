@@ -29,6 +29,13 @@ Notes:
         __leave; \
     }
 
+#define PRINT_FAILURE(_expr, ...) { \
+    wprintf(__VA_ARGS__); \
+    error = GetLastError(); \
+    wprintf(L" - (%s): 0x%08x - failed: %d ( %08x )\n", \
+        L#_expr, (_expr), error, error); \
+}
+
 CONST UCHAR UnicodeBom[] = {0xff, 0xfe};
 CONST UCHAR Utf8Bom[] = {0xef, 0xbb, 0xbf};
 
@@ -57,10 +64,12 @@ PSTR UnicodeToUtf8(PWSTR unicodeString)
     PSTR utf8String;
     int sizeOfUtf8StringInChars;
     int result;
+    DWORD error;
 
-    result = WideCharToMultiByte(CP_UTF8, 0, unicodeString, -1, NULL, 0, NULL, NULL);
+    result = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, unicodeString, -1, NULL, 0, NULL, NULL);
     if ((result == 0) || (result == 0xfffd)) {
 
+        PRINT_FAILURE(result, L"WideCharToMultiByte");
         return NULL;
     }
 
@@ -71,9 +80,10 @@ PSTR UnicodeToUtf8(PWSTR unicodeString)
         return NULL;
     }
 
-    result = WideCharToMultiByte(CP_UTF8, 0, unicodeString, -1, utf8String, sizeOfUtf8StringInChars, NULL, NULL);
+    result = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, unicodeString, -1, utf8String, sizeOfUtf8StringInChars, NULL, NULL);
     if ((result == 0) || (result == 0xfffd)) {
 
+        PRINT_FAILURE(result, L"WideCharToMultiByte");
         free(utf8String);
         return NULL;
     }
@@ -86,10 +96,12 @@ PWSTR Utf8ToUnicode(PSTR utf8String)
     PWSTR unicodeString;
     int sizeOfStringInWChars;
     int result;
+    DWORD error;
 
-    result = MultiByteToWideChar(CP_UTF8, 0, utf8String, -1, NULL, 0);
+    result = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8String, -1, NULL, 0);
     if ((result == 0) || (result == 0xfffd)) {
 
+        PRINT_FAILURE(result, L"MultiByteToWideChar");
         return NULL;
     }
 
@@ -100,9 +112,10 @@ PWSTR Utf8ToUnicode(PSTR utf8String)
         return NULL;
     }
 
-    result = MultiByteToWideChar(CP_UTF8, 0, utf8String, -1, unicodeString, sizeOfStringInWChars);
+    result = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8String, -1, unicodeString, sizeOfStringInWChars);
     if ((result == 0) || (result == 0xfffd)) {
 
+        PRINT_FAILURE(result, L"MultiByteToWideChar");
         free(unicodeString);
         return NULL;
     }
@@ -141,8 +154,8 @@ DWORD WriteToFile(PWSTR filePath, PVOID string, bool isUnicode)
 
 bool IsUnicodeEncoded(PUCHAR buffer, SIZE_T size) {
 
-    if ((size == sizeof(UnicodeBom)) &&
-        (memcmp(buffer, UnicodeBom, size)) == 0) {
+    if ((size >= sizeof(UnicodeBom)) &&
+        (memcmp(buffer, UnicodeBom, sizeof(UnicodeBom))) == 0) {
 
         return true;
     }
@@ -152,8 +165,8 @@ bool IsUnicodeEncoded(PUCHAR buffer, SIZE_T size) {
 
 bool IsUtf8Encoded(PUCHAR buffer, SIZE_T size) {
 
-    if ((size == sizeof(Utf8Bom)) &&
-        (memcmp(buffer, Utf8Bom, size)) == 0) {
+    if ((size >= sizeof(Utf8Bom)) &&
+        (memcmp(buffer, Utf8Bom, sizeof(Utf8Bom))) == 0) {
 
         return true;
     }
@@ -218,42 +231,42 @@ DWORD wmain(int argc, wchar_t *argv[])
         *(PWSTR)(buffer + bytesRead + 2) = L'\0';
 
         //
-        //  Print strings assuming varios encodings, with and without skipping
+        //  Print strings assuming various encodings, with and without skipping
         //  BOM bytes.
         //    - 2 BOM bytes for UNICODE
         //    - 3 BOM bytes for UTF8
         //
 
-        if (memcmp(buffer, UnicodeBom, sizeof(UnicodeBom)) == 0) {
+        if (IsUnicodeEncoded(buffer, bytesRead)) {
 
-            wprintf(L"Cast as wchar_t *   : '%s'\n", (PWSTR)buffer);
-            unicodeText = (PWSTR)(buffer + 2);
-            wprintf(L"Cast as wchar_t * +2: '%s'\n", unicodeText);
+            wprintf(L"\nCast as wchar_t *   : '%s'\n", (PWSTR)buffer);
+            unicodeText = (PWSTR)(buffer + sizeof(UnicodeBom));
+            wprintf(L"\nCast as wchar_t * +%d: '%s'\n", (int)sizeof(UnicodeBom), unicodeText);
             utf8Text = UnicodeToUtf8(unicodeText);
             CHK(utf8Text != NULL, L"UnicodeToUtf8");
-            wprintf(L"Converted to UTF8   : '%S'\n", utf8Text);
-            PrintHex((PUCHAR)utf8Text, strlen(utf8Text), L"Converted UTF8");
+            wprintf(L"\nConverted to UTF8   : '%S'\n", utf8Text);
+            PrintHex((PUCHAR)utf8Text, strlen(utf8Text), L"\nConverted UTF8");
             error = WriteToFile(L"Converted-Utf8.txt", utf8Text, false);
             unicodeText = Utf8ToUnicode(utf8Text);
             CHK(unicodeText != NULL, L"Utf8ToUnicode");
-            wprintf(L"Back to unicode     : '%s'\n", unicodeText);
-            PrintHex((PUCHAR)unicodeText, wcslen(unicodeText), L"Back to Unicode");
+            wprintf(L"\nBack to unicode     : '%s'\n", unicodeText);
+            PrintHex((PUCHAR)unicodeText, wcslen(unicodeText) * sizeof(WCHAR), L"\nBack to Unicode");
             error = WriteToFile(L"BackTo-Unicode.txt", unicodeText, true);
 
-        } else if (memcmp(buffer, Utf8Bom, sizeof(Utf8Bom)) == 0) {
+        } else if (IsUtf8Encoded(buffer, bytesRead)) {
 
-            wprintf(L"Cast as char *      : '%S'\n", buffer);
-            utf8Text = (PSTR)(buffer + 3);
-            wprintf(L"Cast as char * +3   : '%S'\n", utf8Text);
+            wprintf(L"\nCast as char *      : '%S'\n", buffer);
+            utf8Text = (PSTR)(buffer + sizeof(Utf8Bom));
+            wprintf(L"\nCast as char * +%d   : '%S'\n", (int)sizeof(Utf8Bom), utf8Text);
             unicodeText = Utf8ToUnicode(utf8Text);
             CHK(unicodeText != NULL, L"Utf8ToUnicode");
-            wprintf(L"Converted to unicode: '%s'\n", unicodeText);
-            PrintHex((PUCHAR)unicodeText, wcslen(unicodeText) * sizeof(WCHAR), L"Converted Unicode");
+            wprintf(L"\nConverted to unicode: '%s'\n", unicodeText);
+            PrintHex((PUCHAR)unicodeText, wcslen(unicodeText) * sizeof(WCHAR), L"\nConverted Unicode");
             error = WriteToFile(L"Converted-Unicode.txt", unicodeText, true);
             utf8Text = UnicodeToUtf8(unicodeText);
             CHK(utf8Text != NULL, L"UnicodeToUtf8");
-            wprintf(L"Back to UTF8        : '%S'\n", utf8Text);
-            PrintHex((PUCHAR)utf8Text, strlen(utf8Text), L"Back to UTF8");
+            wprintf(L"\nBack to UTF8        : '%S'\n", utf8Text);
+            PrintHex((PUCHAR)utf8Text, strlen(utf8Text), L"\nBack to UTF8");
             error = WriteToFile(L"BackTo-Utf8.txt", utf8Text, false);
         }
 
